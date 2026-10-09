@@ -10,6 +10,8 @@ import type {
   SearchMode,
   Settings,
   Snapshot,
+  VisionConfig,
+  VisionStatus,
 } from './types'
 
 export const isDesktop = isTauri()
@@ -39,6 +41,12 @@ export const api = {
   importModels: () => invoke<boolean>('import_models'),
   index: (id: string | null = null) => invoke<void>('start_index', { id }),
   pauseIndex: () => invoke<void>('pause_index'),
+  visionStatus: () => invoke<VisionStatus>('vision_status'),
+  saveVisionConfig: (config: VisionConfig, apiKey: string | null) =>
+    invoke<void>('save_vision_config', { config, apiKey }),
+  testVision: () => invoke<{ text: string; model: string }>('test_vision'),
+  describe: (id: string | null = null) => invoke<void>('start_vision', { id }),
+  pauseVision: () => invoke<void>('pause_vision'),
   onDrop: (handler: (type: DragDropEvent['type'], paths: string[]) => void) => {
     if (!isDesktop) return
     return getCurrentWebview().onDragDropEvent(({ payload }) =>

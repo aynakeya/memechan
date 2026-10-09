@@ -1,27 +1,25 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
 import type { ContextMenuItem } from '@nuxt/ui'
-import { useToast } from '@nuxt/ui/composables/useToast'
+import { errorMessage, useNotifications } from './composables/useNotifications'
+import { sizeLabel } from './format'
+import SettingsDialog from './components/SettingsDialog.vue'
+import AssetDetails from './components/AssetDetails.vue'
+import AssetGrid from './components/AssetGrid.vue'
 import { zh_cn } from '@nuxt/ui/locale'
 import UApp from '@nuxt/ui/components/App.vue'
 import UAlert from '@nuxt/ui/components/Alert.vue'
 import UBadge from '@nuxt/ui/components/Badge.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
-import UCheckbox from '@nuxt/ui/components/Checkbox.vue'
-import UContextMenu from '@nuxt/ui/components/ContextMenu.vue'
-import UDropdownMenu from '@nuxt/ui/components/DropdownMenu.vue'
 import UFormField from '@nuxt/ui/components/FormField.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
 import UKbd from '@nuxt/ui/components/Kbd.vue'
 import UModal from '@nuxt/ui/components/Modal.vue'
-import UProgress from '@nuxt/ui/components/Progress.vue'
 import USelect from '@nuxt/ui/components/Select.vue'
-import USwitch from '@nuxt/ui/components/Switch.vue'
 import UTabs from '@nuxt/ui/components/Tabs.vue'
-import UTextarea from '@nuxt/ui/components/Textarea.vue'
 import { api, fileUrl, isDesktop } from './api'
-import type { Asset, Group, ModelStatus, SearchMode, Settings } from './types'
+import type { Asset, Group, ModelStatus, SearchMode, Settings, VisionStatus } from './types'
 
 const assets = ref<Asset[]>([]),
   groups = ref<Group[]>([])
@@ -35,8 +33,7 @@ const loading = ref(false),
   searching = ref(false),
   copying = ref<string | null>(null)
 const selectedId = ref<string | null>(null),
-  preview = ref<Asset | null>(null),
-  hovered = ref<string | null>(null)
+  preview = ref<Asset | null>(null)
 const description = ref(''),
   descriptionSaved = ref(''),
   saving = ref(false)
@@ -45,26 +42,23 @@ const dragging = ref(false),
   compact = ref(false),
   sort = ref('newest')
 const model = ref<ModelStatus | null>(null),
-  importingModels = ref(false),
-  modal = ref<'settings' | 'group' | 'delete' | 'deleteGroup' | 'custom' | null>(null)
+  modal = ref<'group' | 'delete' | 'deleteGroup' | 'custom' | null>(null)
 const groupName = ref(''),
   groupColor = ref('#88966d'),
   editingGroup = ref<Group | null>(null)
+const settingsOpen = ref(false)
 const settingsTab = ref('general'),
   customSize = ref(320),
   menuOpen = ref(false)
 const searchError = ref(''),
   pageError = ref('')
 const searchInput = useTemplateRef('searchInput')
-const toast = useToast()
+const vision = ref<VisionStatus | null>(null)
+const notify = useNotifications()
 const searchTabs = [
   { label: '智能搜索', value: 'hybrid', icon: 'i-lucide-sparkles' },
   { label: '关键词', value: 'keyword' },
   { label: '语义搜索', value: 'semantic' },
-]
-const settingsTabs = [
-  { label: '复制与资料库', value: 'general' },
-  { label: '本地搜索模型', value: 'models' },
 ]
 const sortOptions = [
   { label: '最近添加', value: 'newest' },
@@ -73,7 +67,6 @@ const sortOptions = [
 const modalTitle = computed(() => {
   if (!modal.value) return ''
   return {
-    settings: '偏好设置',
     group: editingGroup.value ? '编辑分组' : '新建分组',
     delete: '删除这张表情？',
     deleteGroup: '删除这个分组？',
@@ -111,27 +104,11 @@ const visible = computed(() => {
   return list
 })
 const sizes = [0, 128, 256, 512]
-const sizeLabel = (size: number) => (size ? `最长边 ${size} px` : '原始尺寸')
-const bytesLabel = (bytes: number) =>
-  bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`
-const stateLabel = (state: string) =>
-  ({ ready: '已完成', pending: '待处理', error: '处理失败' })[state] ?? state
 let searchTimer: ReturnType<typeof setTimeout>,
   pollTimer: ReturnType<typeof setInterval>,
   searchSequence = 0
 let unlistenDrop: (() => void) | undefined
 let refreshingModels = false
-function notify(message: string, error = false) {
-  toast.add({
-    title: message,
-    color: error ? 'error' : 'success',
-    icon: error ? 'i-lucide-circle-alert' : 'i-lucide-check',
-    duration: error ? 8000 : 3500,
-  })
-}
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error)
-}
 async function refresh() {
   const data = await api.snapshot()
   assets.value = data.assets
@@ -140,23 +117,29 @@ async function refresh() {
   if (selectedId.value && !assets.value.some((asset) => asset.id === selectedId.value))
     selectedId.value = null
 }
+async function refreshLibrary() {
+  await refresh()
+  if (query.value.trim()) await runSearch()
+}
 async function refreshModels() {
   if (refreshingModels) return
   refreshingModels = true
   try {
     const previous = model.value
-    const before = previous?.job
     model.value = await api.models()
-    const after = model.value.job
-    const imported =
-      previous &&
-      (previous.import.done !== model.value.import.done ||
-        previous.import.running !== model.value.import.running)
-    if (imported || (before && (before.done !== after.done || before.running !== after.running))) {
-      await refresh()
-      if (query.value.trim()) await runSearch()
-      if (before?.running && !after.running && after.error) notify(after.error, true)
+    if (previous) {
+      const changed = (['job', 'import', 'vision'] as const).some(
+        (key) =>
+          previous[key].done !== model.value![key].done ||
+          previous[key].running !== model.value![key].running,
+      )
+      if (changed) await refreshLibrary()
+      for (const key of ['job', 'vision'] as const) {
+        const after = model.value[key]
+        if (previous[key].running && !after.running && after.error) notify(after.error, true)
+      }
     }
+    pageError.value = ''
   } catch (error) {
     pageError.value = errorMessage(error)
   } finally {
@@ -194,22 +177,25 @@ watch(selectedId, () => {
   description.value = selected.value?.description ?? ''
   descriptionSaved.value = description.value
 })
+async function closeDetails() {
+  if (await saveDetails()) selectedId.value = null
+}
 async function selectAsset(asset: Asset) {
   if (selectedId.value === asset.id) return
   if (description.value !== descriptionSaved.value && !(await saveDetails())) return
   selectedId.value = asset.id
 }
 async function saveDetails() {
+  if (saving.value) return false
   const asset = selected.value
   if (!asset || description.value === descriptionSaved.value) return true
   saving.value = true
   const text = description.value
   try {
     await api.saveAsset(asset.id, text, asset.favorite, asset.groups)
-    descriptionSaved.value = text
-    await refresh()
-    if (query.value.trim()) await runSearch()
-    return true
+    if (asset.id === selectedId.value) descriptionSaved.value = text
+    await refreshLibrary()
+    return description.value === descriptionSaved.value
   } catch (error) {
     notify(errorMessage(error), true)
     return false
@@ -218,29 +204,35 @@ async function saveDetails() {
   }
 }
 async function favorite(asset: Asset) {
+  if (saving.value) return
+  saving.value = true
   const text = asset.id === selectedId.value ? description.value : asset.description
   try {
     await api.saveAsset(asset.id, text, !asset.favorite, asset.groups)
     if (asset.id === selectedId.value) descriptionSaved.value = text
-    await refresh()
-    if (query.value.trim()) await runSearch()
+    await refreshLibrary()
   } catch (error) {
     notify(errorMessage(error), true)
+  } finally {
+    saving.value = false
   }
 }
 async function toggleGroup(id: number) {
-  if (!selected.value) return
+  if (!selected.value || saving.value) return
+  saving.value = true
   const asset = selected.value
+  const text = description.value
   const membership = asset.groups.includes(id)
     ? asset.groups.filter((group) => group !== id)
     : [...asset.groups, id]
   try {
-    await api.saveAsset(asset.id, description.value, asset.favorite, membership)
-    descriptionSaved.value = description.value
-    await refresh()
-    if (query.value.trim()) await runSearch()
+    await api.saveAsset(asset.id, text, asset.favorite, membership)
+    if (asset.id === selectedId.value) descriptionSaved.value = text
+    await refreshLibrary()
   } catch (error) {
     notify(errorMessage(error), true)
+  } finally {
+    saving.value = false
   }
 }
 async function importAssets(paths?: string[]) {
@@ -255,8 +247,7 @@ async function importAssets(paths?: string[]) {
         `已添加 ${report.added} 张表情${report.duplicates ? `，${report.duplicates} 张重复图片已合并` : ''}`,
       )
     if (report.errors.length) notify(report.errors.join('\n'), true)
-    await refresh()
-    if (query.value.trim()) await runSearch()
+    await refreshLibrary()
   } catch (error) {
     notify(errorMessage(error), true)
   } finally {
@@ -346,38 +337,10 @@ async function removeAsset() {
     await api.deleteAsset(selected.value.id)
     modal.value = null
     selectedId.value = null
-    await refresh()
-    if (query.value.trim()) await runSearch()
+    await refreshLibrary()
     notify('已从资料库删除')
   } catch (error) {
     notify(errorMessage(error), true)
-  }
-}
-async function saveSettings() {
-  try {
-    await api.saveSettings({ ...settings.value })
-    notify('设置已保存')
-  } catch (error) {
-    notify(errorMessage(error), true)
-    await refresh()
-  }
-}
-async function setupModels() {
-  try {
-    await api.installModels()
-    await refreshModels()
-  } catch (error) {
-    notify(errorMessage(error), true)
-  }
-}
-async function importModels() {
-  importingModels.value = true
-  try {
-    if (await api.importModels()) await refreshModels()
-  } catch (error) {
-    notify(errorMessage(error), true)
-  } finally {
-    importingModels.value = false
   }
 }
 async function startIndex(id: string | null = null) {
@@ -388,20 +351,28 @@ async function startIndex(id: string | null = null) {
     notify(errorMessage(error), true)
   }
 }
-async function pauseIndex() {
+function openSettings(tab = 'general') {
+  settingsTab.value = tab
+  settingsOpen.value = true
+}
+async function describe(id: string | null = null) {
   try {
-    await api.pauseIndex()
+    await api.describe(id)
+    await refresh()
     await refreshModels()
   } catch (error) {
     notify(errorMessage(error), true)
   }
 }
-function openSettings(tab = 'general') {
-  settingsTab.value = tab
-  modal.value = 'settings'
-}
 function keyboard(event: KeyboardEvent) {
-  if (event.defaultPrevented || modal.value || preview.value || menuOpen.value) return
+  if (
+    event.defaultPrevented ||
+    settingsOpen.value ||
+    modal.value ||
+    preview.value ||
+    menuOpen.value
+  )
+    return
   if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
     event.preventDefault()
     searchInput.value?.inputRef?.focus()
@@ -432,6 +403,7 @@ onMounted(async () => {
   try {
     await refresh()
     await refreshModels()
+    vision.value = await api.visionStatus()
     unlistenDrop = await api.onDrop((type, paths) => {
       dragging.value = type === 'enter' || type === 'over'
       if (type === 'drop') void importAssets(paths)
@@ -672,6 +644,15 @@ onBeforeUnmount(() => {
             >
               后台处理 {{ model.job.done }} / {{ model.job.total }}
             </UButton>
+            <UButton
+              v-if="model?.vision.running"
+              size="xs"
+              variant="link"
+              color="neutral"
+              @click="openSettings('vision')"
+            >
+              图片理解 {{ model.vision.done }} / {{ model.vision.total }}
+            </UButton>
             <span v-if="query && searchMode === 'hybrid' && !model?.ready">当前使用关键词匹配</span>
           </div>
           <div class="flex shrink-0 items-center gap-2">
@@ -767,239 +748,50 @@ onBeforeUnmount(() => {
             </UButton>
           </template>
         </div>
-        <section v-else class="asset-grid" :class="{ compact }" aria-label="表情网格">
-          <UContextMenu
-            v-for="asset in visible"
-            :key="asset.id"
-            :items="assetMenu(asset)"
-            :ui="{ content: 'w-56' }"
-            @update:open="menuOpen = $event"
-          >
-            <article
-              class="asset-card"
-              :class="{ selected: selectedId === asset.id }"
-              tabindex="0"
-              :aria-label="asset.name"
-              @click="selectAsset(asset)"
-              @dblclick="copy(asset)"
-              @keydown.enter.prevent.stop="copy(asset)"
-              @keydown.space.prevent.stop="preview = asset"
-              @focus="selectAsset(asset)"
-              @mouseenter="hovered = asset.id"
-              @mouseleave="hovered = null"
-            >
-              <div class="asset-image" :class="{ animated: asset.animated }">
-                <img
-                  :src="
-                    fileUrl(asset.animated && hovered === asset.id ? asset.path : asset.thumbnail)
-                  "
-                  :alt="asset.name"
-                  loading="lazy"
-                  draggable="false"
-                />
-                <UBadge
-                  v-if="asset.animated"
-                  class="absolute bottom-2 left-2"
-                  color="neutral"
-                  variant="solid"
-                  size="xs"
-                >
-                  {{ hovered === asset.id ? '播放中' : '动图' }}
-                </UBadge>
-                <UButton
-                  class="favorite-button"
-                  :color="asset.favorite ? 'primary' : 'neutral'"
-                  variant="soft"
-                  size="xs"
-                  icon="i-lucide-heart"
-                  :aria-label="asset.favorite ? '取消收藏' : '收藏表情'"
-                  :aria-pressed="asset.favorite"
-                  :ui="{ leadingIcon: asset.favorite ? 'fill-current' : '' }"
-                  @click.stop="favorite(asset)"
-                  @dblclick.stop
-                  @keydown.stop
-                />
-                <UButton
-                  class="card-copy"
-                  size="xs"
-                  icon="i-lucide-copy"
-                  :loading="copying === asset.id"
-                  @click.stop="copy(asset)"
-                  @dblclick.stop
-                  @keydown.stop
-                >
-                  {{ copying === asset.id ? '处理中' : '复制' }}
-                </UButton>
-              </div>
-              <div class="asset-caption">
-                <h3 class="min-w-0 flex-1 truncate text-sm font-medium">{{ asset.name }}</h3>
-                <UDropdownMenu
-                  :items="assetMenu(asset)"
-                  :ui="{ content: 'w-56' }"
-                  @update:open="menuOpen = $event"
-                >
-                  <UButton
-                    color="neutral"
-                    variant="ghost"
-                    size="xs"
-                    icon="i-lucide-ellipsis"
-                    aria-label="更多操作"
-                    @click.stop
-                    @dblclick.stop
-                    @keydown.stop
-                  />
-                </UDropdownMenu>
-              </div>
-              <p v-if="asset.description || asset.ocrText" class="truncate px-1 text-xs text-muted">
-                {{ asset.description || asset.ocrText }}
-              </p>
-            </article>
-          </UContextMenu>
-          <UButton
-            class="add-tile"
-            color="neutral"
-            variant="outline"
-            :loading="importing"
-            @click="importAssets()"
-          >
-            <UIcon name="i-lucide-plus" class="size-6" />
-            添加表情
-          </UButton>
-        </section>
+        <AssetGrid
+          v-else
+          :assets="visible"
+          :selected-id="selectedId"
+          :copying="copying"
+          :compact="compact"
+          :importing="importing"
+          :menu-items="assetMenu"
+          @select="selectAsset"
+          @copy="copy($event)"
+          @preview="preview = $event"
+          @favorite="favorite"
+          @import="importAssets()"
+          @menu-open="menuOpen = $event"
+        />
         <footer class="library-footer">
           <UIcon name="i-lucide-info" class="size-3.5" />
           双击复制 · 空格预览 · 右键选择尺寸
         </footer>
       </main>
 
-      <aside v-if="selected" class="details-panel" aria-label="表情详情">
-        <div class="flex items-center justify-between border-b border-default p-4">
-          <h2 class="text-sm font-semibold">表情详情</h2>
-          <UButton
-            color="neutral"
-            variant="ghost"
-            size="xs"
-            icon="i-lucide-x"
-            aria-label="关闭详情"
-            @click="
-              async () => {
-                if (await saveDetails()) selectedId = null
-              }
-            "
-          />
-        </div>
-        <div class="space-y-5 p-4">
-          <button class="detail-preview" aria-label="放大预览" @click="preview = selected">
-            <img :src="fileUrl(selected.path)" :alt="selected.name" />
-          </button>
-          <div>
-            <div class="flex items-center gap-2">
-              <h3 class="min-w-0 flex-1 truncate font-semibold">{{ selected.name }}</h3>
-              <UButton
-                :color="selected.favorite ? 'primary' : 'neutral'"
-                variant="ghost"
-                size="xs"
-                icon="i-lucide-heart"
-                aria-label="切换收藏"
-                :aria-pressed="selected.favorite"
-                :ui="{ leadingIcon: selected.favorite ? 'fill-current' : '' }"
-                @click="favorite(selected)"
-              />
-            </div>
-            <p class="mt-1 text-xs text-muted">
-              {{ selected.format.toUpperCase() }} · {{ selected.width }} × {{ selected.height }} ·
-              {{ bytesLabel(selected.bytes) }}
-            </p>
-          </div>
-          <UButton
-            block
-            icon="i-lucide-copy"
-            :loading="copying === selected.id"
-            :disabled="!!copying"
-            @click="copy(selected)"
-          >
-            复制表情
-            <span class="ml-auto text-xs opacity-80">{{ sizeLabel(settings.copySize) }}</span>
-          </UButton>
-          <UFormField label="我的描述" name="description">
-            <UTextarea
-              v-model="description"
-              class="w-full"
-              :maxlength="4000"
-              :rows="4"
-              placeholder="添加描述以便搜索"
-              @keydown.ctrl.enter="saveDetails()"
-            />
-            <div class="mt-2 flex items-center justify-between">
-              <span class="text-xs text-muted">{{ description.length }} / 4000</span>
-              <UButton
-                variant="link"
-                size="xs"
-                :loading="saving"
-                :disabled="description === descriptionSaved"
-                @click="saveDetails()"
-              >
-                {{ saving ? '保存中…' : description === descriptionSaved ? '已保存' : '保存描述' }}
-              </UButton>
-            </div>
-          </UFormField>
-          <div class="space-y-3 border-t border-default pt-4">
-            <div class="flex items-center justify-between gap-2">
-              <h3 class="flex items-center gap-2 text-sm font-medium">
-                <UIcon name="i-lucide-scan-text" class="size-4 text-muted" />
-                图片中的文字
-              </h3>
-              <UBadge
-                :color="selected.ocrState === 'error' ? 'error' : 'neutral'"
-                variant="subtle"
-                size="xs"
-              >
-                {{ stateLabel(selected.ocrState) }}
-              </UBadge>
-            </div>
-            <p class="whitespace-pre-wrap text-sm text-muted">
-              {{
-                selected.ocrText ||
-                (selected.ocrState === 'ready'
-                  ? '未识别到文字，可添加自定义描述。'
-                  : '配置模型并建立索引后显示。')
-              }}
-            </p>
-            <UButton
-              variant="link"
-              size="xs"
-              trailing-icon="i-lucide-arrow-right"
-              :disabled="model?.job.running"
-              @click="model?.ready ? startIndex(selected.id) : openSettings('models')"
-            >
-              {{ model?.ready ? '重新识别与索引' : '设置本地模型' }}
-            </UButton>
-          </div>
-          <div class="space-y-3 border-t border-default pt-4">
-            <div class="flex items-center justify-between">
-              <h3 class="text-sm font-medium">所属分组</h3>
-              <UButton variant="link" size="xs" @click="openGroup()">新建</UButton>
-            </div>
-            <p v-if="!groups.length" class="text-sm text-muted">暂无分组</p>
-            <UCheckbox
-              v-for="group in groups"
-              :key="group.id"
-              :label="group.name"
-              :model-value="selected.groups.includes(group.id)"
-              @update:model-value="toggleGroup(group.id)"
-            />
-          </div>
-          <UButton
-            block
-            color="error"
-            variant="ghost"
-            icon="i-lucide-trash-2"
-            @click="modal = 'delete'"
-          >
-            从资料库删除
-          </UButton>
-        </div>
-      </aside>
+      <AssetDetails
+        v-if="selected"
+        v-model="description"
+        :asset="selected"
+        :groups="groups"
+        :model="model"
+        :vision-active="!!vision?.active"
+        :copy-size="settings.copySize"
+        :copying="copying"
+        :saving="saving"
+        :description-saved="descriptionSaved"
+        @close="closeDetails()"
+        @preview="preview = selected"
+        @copy="copy(selected)"
+        @favorite="favorite(selected)"
+        @save="saveDetails()"
+        @index="startIndex(selected.id)"
+        @describe="describe(selected.id)"
+        @settings="openSettings($event)"
+        @create-group="openGroup()"
+        @toggle-group="toggleGroup($event)"
+        @remove="modal = 'delete'"
+      />
     </div>
 
     <div v-if="dragging" class="drop-overlay">
@@ -1052,11 +844,23 @@ onBeforeUnmount(() => {
       </template>
     </UModal>
 
+    <SettingsDialog
+      v-model:open="settingsOpen"
+      v-model:tab="settingsTab"
+      v-model:vision="vision"
+      :settings="settings"
+      :model="model"
+      :asset-count="assets.length"
+      @saved="settings = $event"
+      @refresh="refreshModels()"
+      @index="startIndex()"
+      @describe="describe()"
+    />
     <UModal
       :open="!!modal"
       :title="modalTitle"
       :close="{ 'aria-label': '关闭弹窗' }"
-      :ui="{ content: modal === 'settings' ? 'max-w-xl' : 'max-w-md' }"
+      :ui="{ content: 'max-w-md' }"
       @update:open="
         (open) => {
           if (!open) modal = null
@@ -1064,163 +868,7 @@ onBeforeUnmount(() => {
       "
     >
       <template #body>
-        <template v-if="modal === 'settings'">
-          <UTabs
-            v-model="settingsTab"
-            :items="settingsTabs"
-            :content="false"
-            variant="link"
-            class="mb-5"
-          />
-          <div v-if="settingsTab === 'general'" class="space-y-6">
-            <UFormField
-              label="默认复制尺寸"
-              description="双击和普通复制时使用，按比例缩放。填 0 保留原尺寸。"
-              orientation="horizontal"
-              :ui="{ wrapper: 'flex-1', container: 'shrink-0' }"
-            >
-              <form class="flex items-center gap-2" @submit.prevent="saveSettings()">
-                <UInput
-                  v-model.number="settings.copySize"
-                  type="number"
-                  :min="0"
-                  :max="4096"
-                  required
-                  aria-label="默认复制最长边"
-                  class="w-24"
-                >
-                  <template #trailing><span class="text-xs text-muted">px</span></template>
-                </UInput>
-                <UButton type="submit" variant="soft">保存</UButton>
-              </form>
-            </UFormField>
-            <UFormField
-              label="允许放大小图"
-              description="关闭时，小于目标尺寸的图片保留原尺寸。"
-              orientation="horizontal"
-            >
-              <USwitch v-model="settings.allowUpscale" @update:model-value="saveSettings()" />
-            </UFormField>
-            <UFormField
-              label="自动建立搜索索引"
-              description="模型就绪后，导入图片和修改描述会自动索引。"
-              orientation="horizontal"
-            >
-              <USwitch v-model="settings.autoIndex" @update:model-value="saveSettings()" />
-            </UFormField>
-            <UAlert
-              color="neutral"
-              variant="subtle"
-              icon="i-lucide-info"
-              description="原图始终保留。GIF 缩放保留动画；动态 WebP / APNG 缩放后以 GIF 复制，颜色和透明效果可能变化。原尺寸复制保留原文件格式。"
-            />
-          </div>
-          <div v-else class="space-y-4">
-            <div class="model-item">
-              <UIcon name="i-lucide-scan-text" class="size-5 shrink-0 text-primary" />
-              <div class="flex-1">
-                <h3 class="text-sm font-medium">图片文字识别</h3>
-                <p class="mt-1 text-xs text-muted">PP-OCRv5 mobile · 中文 / 英文 / 日文</p>
-              </div>
-              <UBadge color="neutral" variant="subtle" size="xs">
-                {{
-                  model && !model.missing.some((name) => name.startsWith('ocr-'))
-                    ? '已安装'
-                    : '待安装'
-                }}
-              </UBadge>
-            </div>
-            <div class="model-item">
-              <UIcon name="i-lucide-text-search" class="size-5 shrink-0 text-primary" />
-              <div class="flex-1">
-                <h3 class="text-sm font-medium">描述语义检索</h3>
-                <p class="mt-1 text-xs text-muted">Qwen3-Embedding-0.6B · 多语言 · 本地推理</p>
-              </div>
-              <UBadge color="neutral" variant="subtle" size="xs">
-                {{
-                  model && !model.missing.some((name) => name.startsWith('qwen3-'))
-                    ? '已安装'
-                    : '待安装'
-                }}
-              </UBadge>
-            </div>
-            <div v-if="model?.job.running" class="space-y-3">
-              <div class="flex justify-between gap-3 text-xs text-muted">
-                <span>{{ model.job.message }}</span>
-                <span>{{ model.job.done }} / {{ model.job.total }}</span>
-              </div>
-              <UProgress
-                :model-value="model.job.done"
-                :max="Math.max(1, model.job.total)"
-                aria-label="模型处理进度"
-              />
-              <UButton variant="soft" size="sm" icon="i-lucide-pause" @click="pauseIndex()">
-                暂停任务
-              </UButton>
-            </div>
-            <UAlert
-              v-if="model?.job.error"
-              role="alert"
-              color="error"
-              variant="subtle"
-              :description="model.job.error"
-            />
-            <p
-              v-else-if="model?.job.message && !model.job.running"
-              class="text-xs text-muted"
-              role="status"
-            >
-              {{ model.job.message }}
-            </p>
-            <div class="flex flex-wrap gap-2">
-              <UButton
-                :variant="model?.ready ? 'outline' : 'solid'"
-                icon="i-lucide-folder-open"
-                :loading="importingModels"
-                :disabled="model?.job.running"
-                @click="importModels()"
-              >
-                {{ importingModels ? '选择模型文件…' : '导入本地模型' }}
-              </UButton>
-              <UButton
-                v-if="model?.ready"
-                icon="i-lucide-scan-text"
-                :disabled="model.job.running || importingModels"
-                @click="startIndex()"
-              >
-                继续处理待索引表情
-              </UButton>
-            </div>
-            <p class="text-xs text-muted">可多选模型文件。导入与推理均不联网，原文件保留。</p>
-            <p v-if="model?.missing.length" class="text-xs break-words text-muted">
-              还需导入：{{ model.missing.join('、') }}
-            </p>
-            <details class="model-location">
-              <summary>模型保存位置与离线安装</summary>
-              <code>{{ model?.directory || '桌面应用数据目录 / models' }}</code>
-              <p>
-                支持 README 列出的 PP-OCRv5 mobile、Qwen3-Embedding-0.6B INT8 与配套
-                tokenizer，无需重命名。
-              </p>
-            </details>
-            <details v-if="!model?.ready" class="model-location">
-              <summary>可选：联网下载</summary>
-              <p>
-                点击下方按钮时连接 ModelScope 和 Hugging Face，完整模型约 647 MB，图片不会上传。
-              </p>
-              <UButton
-                color="neutral"
-                variant="outline"
-                icon="i-lucide-download"
-                :disabled="model?.job.running || importingModels"
-                @click="setupModels()"
-              >
-                联网下载模型
-              </UButton>
-            </details>
-          </div>
-        </template>
-        <form v-else-if="modal === 'group'" class="space-y-5" @submit.prevent="saveGroup">
+        <form v-if="modal === 'group'" class="space-y-5" @submit.prevent="saveGroup">
           <UFormField label="分组名称" name="group-name" required>
             <UInput
               v-model="groupName"

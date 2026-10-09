@@ -9,6 +9,10 @@ export interface Asset {
   bytes: number
   animated: boolean
   description: string
+  aiDescription: string
+  aiState: string
+  aiError: string
+  aiModel: string
   ocrText: string
   ocrState: string
   indexState: string
@@ -46,6 +50,17 @@ export interface ModelStatus {
   missing: string[]
   job: JobStatus
   import: JobStatus
+  vision: JobStatus
+}
+export interface VisionConfig {
+  baseUrl: string
+  model: string
+  autoDescribe: boolean
+}
+export interface VisionStatus {
+  config: VisionConfig
+  active: boolean
+  hasApiKey: boolean
 }
 export interface ImportReport {
   added: number

@@ -1,7 +1,6 @@
 use crate::{media, Result};
 use ort::{session::Session, value::Tensor};
 use paddle_ocr_rs::ocr_lite::OcrLite;
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File},
@@ -48,23 +47,6 @@ pub const FILES: &[ModelFile] = &[
         sha256: "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
     },
 ];
-
-#[derive(Clone, Default, Serialize)]
-pub struct JobStatus {
-    pub running: bool,
-    pub done: usize,
-    pub total: usize,
-    pub message: String,
-    pub error: Option<String>,
-}
-#[derive(Serialize)]
-pub struct ModelStatus {
-    pub ready: bool,
-    pub directory: String,
-    pub missing: Vec<String>,
-    pub job: JobStatus,
-    pub import: JobStatus,
-}
 
 pub fn missing(directory: &Path) -> Vec<String> {
     FILES
@@ -234,15 +216,9 @@ impl Intelligence {
     }
     pub fn recognize(&mut self, path: &Path) -> Result<String> {
         let mut texts = Vec::new();
-        for frame in media::ocr_frames(path)? {
+        for frame in media::sample_frames(path)? {
             // White compositing avoids turning transparent lettering into a black background.
-            let mut background = image::RgbaImage::from_pixel(
-                frame.width(),
-                frame.height(),
-                image::Rgba([255, 255, 255, 255]),
-            );
-            image::imageops::overlay(&mut background, &frame.to_rgba8(), 0, 0);
-            let rgb = image::DynamicImage::ImageRgba8(background).to_rgb8();
+            let rgb = media::rgb_on_white(&frame);
             let result = self.ocr.detect(&rgb, 32, 960, 0.5, 0.3, 1.6, true, false)?;
             for block in result.text_blocks {
                 let text = block.text.trim().to_string();

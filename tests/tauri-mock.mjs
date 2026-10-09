@@ -22,6 +22,10 @@ const assets = names.map((name, i) => {
     bytes: 20480,
     animated: i === 1,
     description: i === 1 ? '假装忙碌，其实想下班' : '',
+    aiDescription: '',
+    aiState: 'idle',
+    aiError: '',
+    aiModel: '',
     ocrText: name,
     ocrState: 'ready',
     indexState: 'ready',
@@ -32,6 +36,11 @@ const assets = names.map((name, i) => {
   }
 })
 const settings = { copySize: 0, allowUpscale: false, autoIndex: true }
+const vision = {
+  config: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash', autoDescribe: false },
+  active: false,
+  hasApiKey: false,
+}
 window.testCalls = []
 window.testModelImportResult = true
 window.testModel = {
@@ -40,6 +49,7 @@ window.testModel = {
   missing: [],
   job: { running: false, done: 0, total: 0, message: '', error: null },
   import: { running: false, done: 0, total: 0, message: '', error: null },
+  vision: { running: false, done: 0, total: 0, message: '', error: null },
 }
 
 mockIPC(
@@ -54,6 +64,45 @@ mockIPC(
         }),
       )
     if (command === 'model_status') return window.structuredClone(window.testModel)
+    if (command === 'vision_status') return JSON.parse(JSON.stringify(vision))
+    if (command === 'save_vision_config') {
+      vision.config = { ...args.config }
+      vision.active = true
+      if (args.apiKey !== null) vision.hasApiKey = !!args.apiKey
+      return
+    }
+    if (command === 'test_vision')
+      return { model: 'test-vision', text: '左侧红色方块，右侧蓝色圆形。' }
+    if (command === 'start_vision') {
+      Object.assign(window.testModel.vision, {
+        running: true,
+        done: 0,
+        total: args.id ? 1 : assets.length,
+        message: '生成描述',
+        error: null,
+      })
+      if (args.id) {
+        const asset = assets.find((asset) => asset.id === args.id)
+        asset.aiState = 'pending'
+        window.setTimeout(() => {
+          Object.assign(asset, {
+            aiDescription: '女孩举手敬礼，表示收到。',
+            aiState: 'ready',
+            aiModel: 'test-vision',
+          })
+          Object.assign(window.testModel.vision, {
+            running: false,
+            done: 1,
+            message: '描述生成完成',
+          })
+        }, 500)
+      }
+      return
+    }
+    if (command === 'pause_vision') {
+      Object.assign(window.testModel.vision, { running: false, message: '图片理解已暂停' })
+      return
+    }
     if (command === 'import_models') {
       if (window.testModelImportResult) {
         window.testModel.ready = true
@@ -62,11 +111,16 @@ mockIPC(
       }
       return window.testModelImportResult
     }
-    if (command === 'save_asset')
+    if (command === 'save_asset') {
+      if (window.testHoldSave)
+        await new Promise((resolve) => {
+          window.testFinishSave = resolve
+        })
       return Object.assign(
         assets.find((a) => a.id === args.id),
         { description: args.description, favorite: args.favorite, groups: args.groups },
       )
+    }
     if (command === 'copy_asset') return '已复制图片'
     if (command === 'save_settings') return Object.assign(settings, args.settings)
     if (command === 'search') throw new Error('测试：本地模型未就绪')
@@ -76,7 +130,10 @@ mockIPC(
         for (const path of args.paths) {
           assets.push({ ...assets[0], id: path, name: path, groups: [] })
           window.testModel.import.done++
-          await new Promise((resolve) => window.setTimeout(resolve, 2000))
+          if (window.testModel.import.done === 1)
+            await new Promise((resolve) => {
+              window.testResumeImport = resolve
+            })
         }
         window.testModel.import.running = false
       }

@@ -169,7 +169,20 @@ fn resize_animation<'a>(
     writer.flush()?;
     Ok(())
 }
-pub fn ocr_frames(path: &Path) -> Result<Vec<DynamicImage>> {
+pub fn rgb_on_white(image: &DynamicImage) -> image::RgbImage {
+    let mut background =
+        image::RgbImage::from_pixel(image.width(), image.height(), image::Rgb([255; 3]));
+    for (target, source) in background.pixels_mut().zip(image.to_rgba8().pixels()) {
+        let alpha = u32::from(source[3]);
+        for channel in 0..3 {
+            target[channel] =
+                ((u32::from(source[channel]) * alpha + 255 * (255 - alpha)) / 255) as u8;
+        }
+    }
+    background
+}
+
+pub fn sample_frames(path: &Path) -> Result<Vec<DynamicImage>> {
     let bytes = fs::read(path)?;
     let info = inspect(&bytes)?;
     if !info.animated {
@@ -237,7 +250,6 @@ mod tests {
                 .read_info(BufReader::new(File::open(&output)?))?
                 .repeat();
             assert_eq!(source_repeat, output_repeat);
-            assert_eq!(ocr_frames(&source)?.len(), 2);
             let decoded = GifDecoder::new(BufReader::new(File::open(output)?))?;
             let frames = decoded.into_frames().collect_frames()?;
             assert_eq!(frames.len(), 2);

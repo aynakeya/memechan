@@ -9,6 +9,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+const ASSET_COLUMNS: &str = "id,name,extension,width,height,bytes,animated,description,ocr_text,ocr_state,index_state,favorite,created_at,ai_description,ai_state,ai_error,ai_model";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Asset {
@@ -22,6 +24,10 @@ pub struct Asset {
     pub bytes: u64,
     pub animated: bool,
     pub description: String,
+    pub ai_description: String,
+    pub ai_state: String,
+    pub ai_error: String,
+    pub ai_model: String,
     pub ocr_text: String,
     pub ocr_state: String,
     pub index_state: String,
@@ -31,202 +37,6 @@ pub struct Asset {
     pub score: Option<f32>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn importing_duplicates_preserves_membership_and_group_deletion_keeps_files() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let source = directory.path().join("smile.png");
-        image::RgbaImage::from_pixel(12, 8, image::Rgba([40, 180, 90, 255])).save(&source)?;
-        let mut library = Library::open(&directory.path().join("library"))?;
-        let group = library.save_group(None, "开心", "#88966d")?;
-        let paths = vec![source.to_string_lossy().into_owned()];
-        assert_eq!(library.import_files(&paths, None).added, 1);
-        assert_eq!(library.import_files(&paths, Some(group.id)).duplicates, 1);
-        assert_eq!(library.assets()?.len(), 1);
-        assert_eq!(library.assets()?[0].groups, vec![group.id]);
-        library.delete_group(group.id)?;
-        let asset = library.assets()?.remove(0);
-        assert!(asset.groups.is_empty());
-        assert!(Path::new(&asset.path).exists());
-        library.delete_asset(&asset.id)?;
-        assert!(source.exists());
-        assert!(library.assets()?.is_empty());
-        assert!(!Path::new(&asset.path).exists());
-        Ok(())
-    }
-
-    #[test]
-    fn edits_invalidate_semantic_vectors_and_chinese_ocr_remains_searchable() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let source = directory.path().join("meme.png");
-        image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 255, 255, 255])).save(&source)?;
-        let mut library = Library::open(&directory.path().join("library"))?;
-        let report = library.import_files(&[source.to_string_lossy().into_owned()], None);
-        assert!(report.errors.is_empty());
-        let asset = library.assets()?.remove(0);
-        library.update_ocr(&asset.id, "今天不想上班")?;
-        library.save_asset(&asset.id, "摸鱼", false, &[])?;
-        let old_source = Library::search_text(&library.asset(&asset.id)?);
-        library.put_embedding(&asset.id, &old_source, &[1.0, 0.0])?;
-        assert_eq!(
-            library
-                .search("工作疲惫", "semantic", None, Some(&[1.0, 0.0]))?
-                .len(),
-            1
-        );
-        assert_eq!(library.search("不想上班", "keyword", None, None)?.len(), 1);
-        library.save_asset(&asset.id, "准备下班", false, &[])?;
-        assert!(library
-            .search("工作疲惫", "semantic", None, Some(&[1.0, 0.0]))?
-            .is_empty());
-        // A background job finishing after an edit must not publish its old vector.
-        library.put_embedding(&asset.id, &old_source, &[1.0, 0.0])?;
-        assert_eq!(library.asset(&asset.id)?.index_state, "pending");
-        let source = Library::search_text(&library.asset(&asset.id)?);
-        library.put_embedding(&asset.id, &source, &[0.0, 1.0])?;
-        assert_eq!(library.asset(&asset.id)?.index_state, "ready");
-        Ok(())
-    }
-
-    #[test]
-    fn ocr_upgrade_preserves_library_and_queues_reindexing_once() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path().join("library");
-        let source = directory.path().join("meme.png");
-        image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 255, 255, 255])).save(&source)?;
-        let mut library = Library::open(&root)?;
-        let group = library.save_group(None, "打工", "#88966d")?;
-        let report = library.import_files(&[source.to_string_lossy().into_owned()], Some(group.id));
-        assert!(report.errors.is_empty());
-        let id = library.assets()?.remove(0).id;
-        library.save_asset(&id, "摸鱼", true, &[group.id])?;
-        library.update_ocr(&id, "今天不想上班")?;
-        let text = Library::search_text(&library.asset(&id)?);
-        library.put_embedding(&id, &text, &[1.0, 0.0])?;
-        library.db.pragma_update(None, "user_version", 1)?;
-        drop(library);
-
-        let mut library = Library::open(&root)?;
-        let asset = library.asset(&id)?;
-        assert_eq!(asset.description, "摸鱼");
-        assert!(asset.favorite);
-        assert_eq!(asset.groups, vec![group.id]);
-        assert!(Path::new(&asset.path).exists());
-        assert_eq!(asset.ocr_state, "pending");
-        assert_eq!(asset.index_state, "pending");
-        assert_eq!(library.search("不想上班", "keyword", None, None)?.len(), 1);
-
-        library.update_ocr(&id, "今天不想上班，想休息")?;
-        // The old vector must not be returned after OCR changes its source text.
-        assert!(library
-            .search("休息", "semantic", None, Some(&[1.0, 0.0]))?
-            .is_empty());
-        let text = Library::search_text(&library.asset(&id)?);
-        library.put_embedding(&id, &text, &[1.0, 0.0])?;
-        drop(library);
-        let library = Library::open(&root)?;
-        let asset = library.asset(&id)?;
-        assert_eq!(asset.ocr_state, "ready");
-        assert_eq!(asset.index_state, "ready");
-        Ok(())
-    }
-
-    #[test]
-    fn model_changes_requeue_vectors_without_repeating_ocr() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path().join("library");
-        let source = directory.path().join("meme.png");
-        image::RgbaImage::new(4, 4).save(&source)?;
-        let mut library = Library::open(&root)?;
-        assert_eq!(
-            library
-                .import_files(&[source.to_string_lossy().into_owned()], None)
-                .added,
-            1
-        );
-        let asset = library.next_pending(None)?.unwrap();
-        library.update_ocr(&asset.id, "收到")?;
-        library.save_asset(&asset.id, "举手敬礼", true, &[])?;
-        let text = Library::search_text(&library.asset(&asset.id)?);
-        library.put_embedding(&asset.id, &text, &[1.0, 0.0])?;
-        library
-            .db
-            .execute("UPDATE embeddings SET model='previous-model'", [])?;
-        drop(library);
-
-        let mut library = Library::open(&root)?;
-        let pending = library.next_pending(None)?.unwrap();
-        assert_eq!(pending.id, asset.id);
-        assert_eq!(pending.ocr_state, "ready");
-        assert_eq!(pending.ocr_text, "收到");
-        assert!(pending.favorite);
-        assert_eq!(pending.description, "举手敬礼");
-        assert!(library
-            .search("salute", "semantic", None, Some(&[1.0, 0.0]))?
-            .is_empty());
-        library.put_embedding(&pending.id, &text, &[0.0, 1.0])?;
-        drop(library);
-        assert_eq!(Library::open(&root)?.pending_count(None)?, 0);
-        Ok(())
-    }
-
-    #[test]
-    fn batch_indexing_publishes_each_item_and_resumes_only_pending_work() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path().join("library");
-        let mut paths = Vec::new();
-        for index in 0..32 {
-            let path = directory.path().join(format!("meme-{index}.png"));
-            image::RgbaImage::from_pixel(4, 4, image::Rgba([index, 0, 0, 255])).save(&path)?;
-            paths.push(path.to_string_lossy().into_owned());
-        }
-        paths.push(
-            directory
-                .path()
-                .join("missing.png")
-                .to_string_lossy()
-                .into_owned(),
-        );
-        let mut library = Library::open(&root)?;
-        let report = library.import_files(&paths, None);
-        assert_eq!(report.added, 32);
-        assert_eq!(report.errors.len(), 1);
-        let first = library.next_pending(None)?.unwrap();
-        assert_eq!(first.name, "meme-0");
-        library.update_ocr(&first.id, "开心")?;
-        let text = Library::search_text(&library.asset(&first.id)?);
-        library.put_embedding(&first.id, &text, &[1.0, 0.0])?;
-        assert_eq!(library.pending_count(None)?, 31);
-        assert_eq!(
-            library
-                .search("happy", "semantic", None, Some(&[1.0, 0.0]))?
-                .len(),
-            1
-        );
-
-        let failed = library.next_pending(None)?.unwrap();
-        library.mark_error(&failed.id, true)?;
-        library.mark_error(&failed.id, false)?;
-        let next = library.next_pending(None)?.unwrap();
-        assert_ne!(next.id, failed.id);
-        drop(library);
-
-        let mut library = Library::open(&root)?;
-        assert_eq!(library.pending_count(None)?, 30);
-        assert_eq!(library.next_pending(None)?.unwrap().id, next.id);
-        assert_eq!(library.asset(&first.id)?.index_state, "ready");
-        library.delete_asset(&next.id)?;
-        // A job finishing after deletion must neither fail the queue nor resurrect the item.
-        library.put_embedding(&next.id, &Library::search_text(&next), &[1.0, 0.0])?;
-        assert!(library.find_asset(&next.id)?.is_none());
-        assert_eq!(library.pending_count(None)?, 29);
-        assert!(library.next_pending(Some(&first.id))?.is_none());
-        Ok(())
-    }
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Group {
     pub id: i64,
@@ -265,7 +75,7 @@ pub struct ImportReport {
 
 pub struct Library {
     pub root: PathBuf,
-    pub db: Connection,
+    db: Connection,
 }
 impl Library {
     pub fn open(root: &Path) -> Result<Self> {
@@ -285,6 +95,7 @@ impl Library {
           CREATE TABLE IF NOT EXISTS asset_groups (asset_id TEXT REFERENCES assets(id) ON DELETE CASCADE,
             group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE, PRIMARY KEY(asset_id,group_id));
           CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS vision_settings (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS embeddings (asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
             model TEXT NOT NULL, source TEXT NOT NULL, vector BLOB NOT NULL);")?;
         let version: u32 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -294,6 +105,17 @@ impl Library {
             tx.execute_batch(
                 "UPDATE assets SET ocr_state='pending',index_state='pending';
               PRAGMA user_version=2;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 3 {
+            let tx = db.transaction()?;
+            tx.execute_batch(
+                "ALTER TABLE assets ADD COLUMN ai_description TEXT NOT NULL DEFAULT '';
+                ALTER TABLE assets ADD COLUMN ai_state TEXT NOT NULL DEFAULT 'idle';
+                ALTER TABLE assets ADD COLUMN ai_error TEXT NOT NULL DEFAULT '';
+                ALTER TABLE assets ADD COLUMN ai_model TEXT NOT NULL DEFAULT '';
+                PRAGMA user_version=3;",
             )?;
             tx.commit()?;
         }
@@ -310,7 +132,8 @@ impl Library {
         )?;
         tx.execute_batch(
             "CREATE INDEX IF NOT EXISTS assets_pending ON assets(created_at)
-            WHERE ocr_state='pending' OR index_state='pending';",
+            WHERE ocr_state='pending' OR index_state='pending';
+            CREATE INDEX IF NOT EXISTS assets_vision_pending ON assets(created_at) WHERE ai_state='pending';",
         )?;
         tx.commit()?;
         Ok(Self {
@@ -337,6 +160,68 @@ impl Library {
         self.db.execute(
             "INSERT INTO settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value",
             [serde_json::to_string(&settings)?],
+        )?;
+        Ok(())
+    }
+    pub fn vision_config(&self) -> Result<crate::vision::VisionConfig> {
+        let json: Option<String> = self
+            .db
+            .query_row("SELECT value FROM vision_settings WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        match json {
+            Some(json) => Ok(serde_json::from_str(&json)?),
+            None => Ok(crate::vision::VisionConfig::default()),
+        }
+    }
+    pub fn save_vision_config(&self, config: &crate::vision::VisionConfig) -> Result<()> {
+        self.db.execute(
+            "INSERT INTO vision_settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value",
+            [serde_json::to_string(config)?],
+        )?;
+        Ok(())
+    }
+    pub fn queue_vision(&self, id: Option<&str>) -> Result<()> {
+        if let Some(id) = id {
+            self.asset(id)?;
+        }
+        self.db.execute(
+            "UPDATE assets SET ai_state='pending',ai_error='' WHERE
+            (?1 IS NOT NULL AND id=?1) OR (?1 IS NULL AND (ai_description='' OR ai_state='error'))",
+            [id],
+        )?;
+        Ok(())
+    }
+    pub fn next_vision(&self, only: Option<&str>) -> Result<Option<Asset>> {
+        let id: Option<String> = self
+            .db
+            .query_row(
+            "SELECT id FROM assets WHERE ai_state='pending' AND (?1 IS NULL OR id=?1) ORDER BY created_at,rowid LIMIT 1",
+            [only],
+                |row| row.get(0),
+            )
+            .optional()?;
+        id.map(|id| self.asset(&id)).transpose()
+    }
+    pub fn vision_pending_count(&self) -> Result<usize> {
+        Ok(self.db.query_row(
+            "SELECT COUNT(*) FROM assets WHERE ai_state='pending'",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+    pub fn update_vision(&self, id: &str, description: &crate::vision::Description) -> Result<()> {
+        self.db.execute(
+            "UPDATE assets SET ai_description=?1,ai_model=?2,ai_state='ready',ai_error='',index_state='pending' WHERE id=?3",
+            params![description.text, description.model, id],
+        )?;
+        Ok(())
+    }
+    pub fn fail_vision(&self, id: &str, error: &str) -> Result<()> {
+        self.db.execute(
+            "UPDATE assets SET ai_state='error',ai_error=?1 WHERE id=?2",
+            params![error, id],
         )?;
         Ok(())
     }
@@ -369,12 +254,18 @@ impl Library {
             index_state: row.get(10)?,
             favorite: row.get(11)?,
             created_at: row.get(12)?,
+            ai_description: row.get(13)?,
+            ai_state: row.get(14)?,
+            ai_error: row.get(15)?,
+            ai_model: row.get(16)?,
             groups: vec![],
             score: None,
         })
     }
     pub fn assets(&self) -> Result<Vec<Asset>> {
-        let mut stmt = self.db.prepare("SELECT id,name,extension,width,height,bytes,animated,description,ocr_text,ocr_state,index_state,favorite,created_at FROM assets ORDER BY created_at DESC,rowid DESC")?;
+        let mut stmt = self.db.prepare(&format!(
+            "SELECT {ASSET_COLUMNS} FROM assets ORDER BY created_at DESC,rowid DESC"
+        ))?;
         let mut assets = stmt
             .query_map([], |row| self.read_asset(row))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -400,10 +291,14 @@ impl Library {
         self.find_asset(id)?.ok_or_else(|| "表情不存在".into())
     }
     pub fn find_asset(&self, id: &str) -> Result<Option<Asset>> {
-        let asset = self.db.query_row(
-            "SELECT id,name,extension,width,height,bytes,animated,description,ocr_text,ocr_state,index_state,favorite,created_at FROM assets WHERE id=?1",
-            [id], |row| self.read_asset(row),
-        ).optional()?;
+        let asset = self
+            .db
+            .query_row(
+                &format!("SELECT {ASSET_COLUMNS} FROM assets WHERE id=?1"),
+                [id],
+                |row| self.read_asset(row),
+            )
+            .optional()?;
         if let Some(mut asset) = asset {
             asset.groups = self
                 .db
@@ -414,6 +309,24 @@ impl Library {
         } else {
             Ok(None)
         }
+    }
+    pub fn queue_index(&self, id: Option<&str>) -> Result<()> {
+        if let Some(id) = id {
+            self.asset(id)?;
+            self.db.execute(
+                "UPDATE assets SET ocr_state='pending',index_state='pending' WHERE id=?1",
+                [id],
+            )?;
+        } else {
+            self.db.execute(
+                "UPDATE assets SET
+                ocr_state=CASE WHEN ocr_state='error' THEN 'pending' ELSE ocr_state END,
+                index_state=CASE WHEN index_state='error' THEN 'pending' ELSE index_state END
+                WHERE ocr_state='error' OR index_state='error'",
+                [],
+            )?;
+        }
+        Ok(())
     }
     pub fn pending_count(&self, only: Option<&str>) -> Result<usize> {
         Ok(self.db.query_row(
@@ -572,6 +485,7 @@ impl Library {
             .join(format!("{id}.{}", info.extension));
         let thumbnail = self.root.join("thumbnails").join(format!("{id}.png"));
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+        let auto_describe = self.vision_config()?.auto_describe;
         let tx = self.db.transaction()?;
         tx.execute(
             "INSERT INTO assets(id,name,extension,width,height,bytes,animated,created_at)
@@ -589,6 +503,9 @@ impl Library {
         )?;
         if let Some(group) = group {
             tx.execute("INSERT INTO asset_groups VALUES(?1,?2)", params![id, group])?;
+        }
+        if auto_describe {
+            tx.execute("UPDATE assets SET ai_state='pending' WHERE id=?1", [&id])?;
         }
         let result = (|| -> Result<()> {
             fs::write(&original, &bytes)?;
@@ -643,7 +560,13 @@ impl Library {
         Ok(())
     }
     pub fn search_text(asset: &Asset) -> String {
-        format!("{}\n{}\n{}", asset.name, asset.description, asset.ocr_text)
+        let mut text = format!("{}\n{}\n{}", asset.name, asset.description, asset.ocr_text);
+        // Preserve existing vectors for assets without an API description.
+        if !asset.ai_description.is_empty() {
+            text.push('\n');
+            text.push_str(&asset.ai_description);
+        }
+        text
     }
     pub fn search(
         &self,
@@ -664,37 +587,45 @@ impl Library {
         if query.is_empty() {
             return Ok(assets);
         }
+        let sources: Vec<_> = assets.iter().map(Self::search_text).collect();
         let mut keyword = vec![];
         let mut semantic = vec![];
-        for (index, asset) in assets.iter().enumerate() {
-            if Self::search_text(asset).to_lowercase().contains(&query) {
+        for (index, source) in sources.iter().enumerate() {
+            if mode != "semantic" && source.to_lowercase().contains(&query) {
                 keyword.push(index);
             }
-            if let Some(q) = embedding {
-                let stored: Option<(String, Vec<u8>)> = self
-                    .db
-                    .query_row(
-                        "SELECT source,vector FROM embeddings WHERE asset_id=?1 AND model=?2",
-                        params![asset.id, crate::intelligence::MODEL_VERSION],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
-                    .optional()?;
-                if let Some((source, bytes)) = stored {
-                    if source != Self::search_text(asset) {
-                        continue;
-                    }
-                    let v: Vec<f32> = bytes
-                        .chunks_exact(4)
-                        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                        .collect();
-                    if q.len() == v.len() {
-                        semantic.push((index, q.iter().zip(v).map(|(a, b)| a * b).sum::<f32>()));
-                    }
+        }
+        if let Some(query) = embedding.filter(|_| mode != "keyword") {
+            let positions: HashMap<_, _> = assets
+                .iter()
+                .enumerate()
+                .map(|(index, asset)| (asset.id.as_str(), index))
+                .collect();
+            let mut statement = self.db.prepare(
+                "SELECT asset_id,source,vector FROM embeddings WHERE model=?1 AND
+                (?2 IS NULL OR asset_id IN (SELECT asset_id FROM asset_groups WHERE group_id=?2))",
+            )?;
+            let mut rows = statement.query(params![crate::intelligence::MODEL_VERSION, group])?;
+            while let Some(row) = rows.next()? {
+                let id = row.get_ref(0)?.as_str()?;
+                let Some(&index) = positions.get(id) else {
+                    continue;
+                };
+                let source = row.get_ref(1)?.as_str()?;
+                let bytes = row.get_ref(2)?.as_blob()?;
+                if source != sources[index] || bytes.len() != query.len() * 4 {
+                    continue;
                 }
+                let score = query
+                    .iter()
+                    .zip(bytes.chunks_exact(4))
+                    .map(|(query, bytes)| query * f32::from_le_bytes(bytes.try_into().unwrap()))
+                    .sum::<f32>();
+                semantic.push((index, score));
             }
         }
-        semantic.sort_by(|a, b| b.1.total_cmp(&a.1));
-        let mut scores = std::collections::HashMap::<usize, f32>::new();
+        semantic.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        let mut scores = HashMap::<usize, f32>::new();
         if mode != "semantic" {
             for (rank, index) in keyword.into_iter().enumerate() {
                 *scores.entry(index).or_default() += 1.0 / (60.0 + rank as f32);
@@ -714,3 +645,6 @@ impl Library {
         Ok(assets)
     }
 }
+
+#[cfg(test)]
+mod tests;

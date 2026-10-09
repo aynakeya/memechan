@@ -34,16 +34,18 @@ fn local_models_import_safely_and_support_ocr_and_semantic_search() -> Result<()
     )
     .is_err());
     assert!(!destination.join("ocr-v5-det.onnx").exists());
-    import_local(&destination, &paths, &cancel, |done, total, message| {
-        println!("{done}/{total} {message}");
-    })?;
-    assert!(missing(&destination).is_empty());
-    // Re-importing installed models should preserve the working installation.
     import_local(&destination, &paths, &cancel, |_, _, _| {})?;
+    assert!(missing(&destination).is_empty());
+    // Re-import from the installation itself without rehashing all large weights.
+    import_local(
+        &destination,
+        &[destination.join("qwen3-tokenizer.json")],
+        &cancel,
+        |_, _, _| {},
+    )?;
     let mut models = Intelligence::load(&destination)?;
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ocr.png");
     let recognized = models.recognize(&fixture)?;
-    println!("OCR text: {recognized}");
     assert!(
         recognized.contains("今天不想上班"),
         "OCR text: {recognized}"

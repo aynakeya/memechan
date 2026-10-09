@@ -12,10 +12,11 @@
 - 静图写入图片和文件剪贴板格式。动图写入原始文件与对应格式，不以静态首帧代替动画。
 - GIF 缩放逐帧处理；动态 WebP / APNG 缩放后转换成 GIF。原文件始终保留。
 - 本地 PP-OCRv5 mobile 中文、英文和日文识别；动图在前 180 帧中最多抽样 5 帧并合并识别文字。
-- Qwen3-Embedding-0.6B INT8 多语言文本向量检索：文件名、自定义描述、OCR 文字作为检索内容。使用查询指令、末个有效 token 的 1024 维向量、L2 归一化和余弦相似度；智能搜索通过倒数排名融合关键词与向量结果。
+- Qwen3-Embedding-0.6B INT8 多语言文本向量检索：文件名、自定义描述、OCR 文字和 API 图片描述作为检索内容。使用查询指令、末个有效 token 的 1024 维向量、L2 归一化和余弦相似度；智能搜索通过倒数排名融合关键词与向量结果。
+- 可配置 OpenAI 兼容的图片理解 API，支持单张生成、批量队列、暂停和可选的导入后自动生成。描述独立保存，不覆盖手写内容。
 - 模型可从本地文件导入，也可手动联网下载；固定版本、模型及 tokenizer 的 SHA-256 校验；本地保存索引，可暂停任务、重试失败项目。
 
-自动图片描述、直接理解无文字图片的视觉语义、云同步暂未实现。当前没有文字且没有自定义描述的图片只能依赖文件名检索。
+未配置图片理解 API 时，没有文字且没有自定义描述的图片只能依赖文件名检索。云同步和直接用图片向量检索暂未实现。
 
 ## 启动
 
@@ -58,7 +59,7 @@ pnpm tauri build
 
 ## 离线模型
 
-本地文件导入、模型加载、识别和搜索不需要外部请求，ONNX Runtime 的遥测在初始化时显式关闭。只有展开「可选：联网下载」并点击「联网下载模型」才会连接 ModelScope 与 Hugging Face；不会自动下载，图片和描述不会上传。推理在本地 CPU 执行，每个会话限制为 2 个线程，图片逐张处理。
+本地文件导入、模型加载、OCR 和文字搜索不需要外部请求，ONNX Runtime 的遥测在初始化时显式关闭。只有展开「可选：联网下载」并点击「联网下载模型」才会连接 ModelScope 与 Hugging Face；不会自动下载。本地推理不会上传图片，配置并主动使用下述图片理解 API 时才会发送图片。推理在本地 CPU 执行，每个会话限制为 2 个线程，图片逐张处理。
 
 模型目录在偏好设置中显示。可以从其他机器拷贝以下文件，再通过应用导入。若直接手动复制到模型目录，则需按左栏重命名并重启应用。合计约 647 MB。
 
@@ -80,6 +81,20 @@ pnpm tauri build
 
 ## 数据与代码
 
+### 图片理解 API
+
+在「偏好设置 → 图片理解 API」填写地址、模型名和 API Key，保存后点击「测试图片理解」。测试发送内置的红色方块与蓝色圆形图片，不读取资料库；这是一次真实 API 调用，可能计费。
+
+- 使用 OpenAI 兼容的 `POST /chat/completions`。地址可填 `https://api.deepseek.com`、`https://example.com/v1` 或完整接口地址；不会自动添加 `/v1`。支持本机 `http://localhost:端口/v1` 免密服务，远程服务需 HTTPS。
+- 默认模型名为 `deepseek-v4-flash`。按照 [DeepSeek 当前文档](https://api-docs.deepseek.com/)，旧名称由当前 Flash 服务处理；详情会显示接口返回的模型名。其他服务需选择支持 `image_url` 的视觉模型。
+- API Key 仅保存在 Rust 进程内存，重启后需重新填写；地址、模型名及自动生成开关保存在 SQLite。更换接口地址不会沿用旧密钥，不在前端持久化密钥。
+- 在详情中点击「通过 API 生成描述」，或在设置中点击「生成缺失描述 / 继续队列」。批量生成跳过已完成描述，失败项可重试。自动生成默认关闭；开启后仅为新导入的图片排队，重启后需重新保存 API 配置才能继续调用。
+- 每次处理一张表情，压缩为最长边不超过 1024 px 的 JPEG。动图复用 OCR 抽帧规则，在前 180 帧中最多抽取 5 帧按时间顺序发送；原文件不变，不保证捕捉到较长动图的全部动作。
+- 描述侧重人物外观、动作、情绪和聊天语境。保存后即支持关键词检索；开启自动索引且本地模型就绪时，自动更新 Qwen 向量。关闭自动索引时，可在本地模型设置中手动继续处理。
+- 网络请求不持有资料库锁；暂停在当前请求完成后生效（请求超时 90 秒）。错误会显示并暂停队列，不会自动重复收费请求。已有描述和未完成队列保留，重新生成失败不会清空旧描述。
+
+### 本地数据
+
 数据放在 Tauri 的应用数据目录 `com.emojidesktop.app` 下，Linux 通常为 `~/.local/share/com.emojidesktop.app/`：
 
 改名为 Memechan 后继续使用这个应用标识，已有图片、模型与设置无需迁移。
@@ -94,7 +109,15 @@ models/            本地模型
 
 关闭应用后备份整个目录即可。删除资料库中的图片不删除最初导入的来源文件；删除分组也不删除图片。复制缓存暂不自动回收，可以在关闭应用、完成粘贴后清理 `copies/`。
 
-前端与后端通过 `src/api.ts` 的 Tauri 命令交互，使用官方 `@tauri-apps/api` 的命令、文件 URL 和拖拽事件接口。`library.rs` 管理 SQLite 与导入；`media.rs` 处理原图、动画和复制副本；`intelligence.rs` 负责模型与推理；`desktop.rs` 连接桌面能力及后台任务。后续自动描述可作为额外的索引文本来源接入，复制尺寸不会改变检索内容。
+前端与后端通过 `src/api.ts` 的 Tauri 命令交互，使用官方 `@tauri-apps/api`。主要代码职责如下：
+
+- `src/App.vue`：资料库状态、搜索、编辑操作和页面组合；`src/components/`：网格、详情和偏好设置。设置表单维护独立草稿，后台刷新不会覆盖正在编辑的值。
+- `src-tauri/src/app.rs`：应用状态、OCR / 索引及图片理解队列；不依赖 Tauri、GTK 或原生剪贴板。
+- `desktop.rs`：Tauri 命令与文件选择；`clipboard.rs`：原生剪贴板及复制串行化。
+- `library.rs`：SQLite、导入、元数据和检索。向量在一次 SQL 查询中读取，不逐张查询数据库；仍然检查模型版本和文本来源，避免使用旧向量。
+- `media.rs`：解码、动图抽帧、透明背景处理和复制副本；`intelligence.rs`：本地模型与推理；`vision.rs`：图片理解 API。
+
+资料库、API 和队列测试放在对应模块的 `tests.rs` 中；`src-tauri/tests/models.rs` 保留需要真实模型的离线集成测试。`benchmarks/embeddings/` 是选型评测资料，不属于日常测试。复制尺寸不会改变检索内容。
 
 依赖使用兼容的稳定版本。TypeScript 保持 6.0.3，不升级到 7；当前 `@typescript-eslint` 支持范围为 `<6.1`。`ort` 固定为 `2.0.0-rc.10`：`paddle-ocr-rs 0.6.1` 仍访问 `Session.inputs` 公共字段，而 `ort rc.13` 已将其改为私有字段与访问方法，需等待 OCR 库适配后再升级。
 
@@ -128,22 +151,23 @@ MEMECHAN_MODEL_TEST_DIR=/tmp/memechan-models \
   --test models -- --ignored --nocapture
 ```
 
-后台队列的真实模型集成测试需要桌面系统依赖，但不打开窗口：
+后台队列的真实模型集成测试也不需要桌面系统依赖：
 
 ```bash
 MEMECHAN_MODEL_TEST_DIR=/tmp/memechan-models \
-  cargo test --manifest-path src-tauri/Cargo.toml --lib \
-  desktop::tests::bulk_import_joins_active_worker_and_resumes_after_restart -- --ignored
+  cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --lib \
+  app::tests::bulk_import_joins_active_worker_and_resumes_after_restart -- --ignored
 ```
 
 已验证的范围：
 
 - Prettier、rustfmt、ESLint、Vue / TypeScript 类型检查、前端生产构建。
 - Rust Clippy（包括桌面代码），资料库与媒体核心行为测试。
+- 图片理解队列与 HTTP 协议测试使用本机模拟服务，不连接付费 API；真实服务可通过设置中的「测试图片理解」手动检查。
 - 本地模型分批导入、重复导入及错误文件拒绝；离线 PP-OCRv5 中文识别及 Qwen 语义排序测试。
 - 索引逐条可见、模型切换后仅重建向量、待处理队列持久化、删除项不会被后台结果恢复。桌面后台任务另有本地模型集成测试，覆盖批量追加、暂停、重启续做和失败项跳过。
 - OCR 升级保留原图与元数据，重新索引一次，且不会使用文字变更前的旧向量。
-- 浏览器中图片显示、拖拽导入、描述保存、复制尺寸、默认设置、动图筛选、预览关闭和搜索错误恢复，使用官方 Tauri mocks；检查界面未请求外部资源。
+- 界面自动化分为编辑与复制、设置与模型、批量导入三个独立场景，使用官方 Tauri mocks；检查保存期间继续编辑的草稿、后台刷新、API 描述展示，以及界面未请求外部资源。
 - Linux 开发版本构建、隔离 Xvfb 中原生窗口启动与文件导入；静图剪贴板尺寸及 GIF 剪贴板完整字节校验。
 
 日常开发需按上方说明安装系统开发依赖。Discord、Telegram 与具体网页中的实际粘贴，以及 Windows/macOS 的运行尚未验证。
