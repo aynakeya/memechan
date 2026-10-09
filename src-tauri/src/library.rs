@@ -1,0 +1,716 @@
+use crate::{media, Result};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Asset {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub thumbnail: String,
+    pub format: String,
+    pub width: u32,
+    pub height: u32,
+    pub bytes: u64,
+    pub animated: bool,
+    pub description: String,
+    pub ocr_text: String,
+    pub ocr_state: String,
+    pub index_state: String,
+    pub favorite: bool,
+    pub created_at: i64,
+    pub groups: Vec<i64>,
+    pub score: Option<f32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn importing_duplicates_preserves_membership_and_group_deletion_keeps_files() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("smile.png");
+        image::RgbaImage::from_pixel(12, 8, image::Rgba([40, 180, 90, 255])).save(&source)?;
+        let mut library = Library::open(&directory.path().join("library"))?;
+        let group = library.save_group(None, "开心", "#88966d")?;
+        let paths = vec![source.to_string_lossy().into_owned()];
+        assert_eq!(library.import_files(&paths, None).added, 1);
+        assert_eq!(library.import_files(&paths, Some(group.id)).duplicates, 1);
+        assert_eq!(library.assets()?.len(), 1);
+        assert_eq!(library.assets()?[0].groups, vec![group.id]);
+        library.delete_group(group.id)?;
+        let asset = library.assets()?.remove(0);
+        assert!(asset.groups.is_empty());
+        assert!(Path::new(&asset.path).exists());
+        library.delete_asset(&asset.id)?;
+        assert!(source.exists());
+        assert!(library.assets()?.is_empty());
+        assert!(!Path::new(&asset.path).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn edits_invalidate_semantic_vectors_and_chinese_ocr_remains_searchable() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("meme.png");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 255, 255, 255])).save(&source)?;
+        let mut library = Library::open(&directory.path().join("library"))?;
+        let report = library.import_files(&[source.to_string_lossy().into_owned()], None);
+        assert!(report.errors.is_empty());
+        let asset = library.assets()?.remove(0);
+        library.update_ocr(&asset.id, "今天不想上班")?;
+        library.save_asset(&asset.id, "摸鱼", false, &[])?;
+        let old_source = Library::search_text(&library.asset(&asset.id)?);
+        library.put_embedding(&asset.id, &old_source, &[1.0, 0.0])?;
+        assert_eq!(
+            library
+                .search("工作疲惫", "semantic", None, Some(&[1.0, 0.0]))?
+                .len(),
+            1
+        );
+        assert_eq!(library.search("不想上班", "keyword", None, None)?.len(), 1);
+        library.save_asset(&asset.id, "准备下班", false, &[])?;
+        assert!(library
+            .search("工作疲惫", "semantic", None, Some(&[1.0, 0.0]))?
+            .is_empty());
+        // A background job finishing after an edit must not publish its old vector.
+        library.put_embedding(&asset.id, &old_source, &[1.0, 0.0])?;
+        assert_eq!(library.asset(&asset.id)?.index_state, "pending");
+        let source = Library::search_text(&library.asset(&asset.id)?);
+        library.put_embedding(&asset.id, &source, &[0.0, 1.0])?;
+        assert_eq!(library.asset(&asset.id)?.index_state, "ready");
+        Ok(())
+    }
+
+    #[test]
+    fn ocr_upgrade_preserves_library_and_queues_reindexing_once() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("library");
+        let source = directory.path().join("meme.png");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 255, 255, 255])).save(&source)?;
+        let mut library = Library::open(&root)?;
+        let group = library.save_group(None, "打工", "#88966d")?;
+        let report = library.import_files(&[source.to_string_lossy().into_owned()], Some(group.id));
+        assert!(report.errors.is_empty());
+        let id = library.assets()?.remove(0).id;
+        library.save_asset(&id, "摸鱼", true, &[group.id])?;
+        library.update_ocr(&id, "今天不想上班")?;
+        let text = Library::search_text(&library.asset(&id)?);
+        library.put_embedding(&id, &text, &[1.0, 0.0])?;
+        library.db.pragma_update(None, "user_version", 1)?;
+        drop(library);
+
+        let mut library = Library::open(&root)?;
+        let asset = library.asset(&id)?;
+        assert_eq!(asset.description, "摸鱼");
+        assert!(asset.favorite);
+        assert_eq!(asset.groups, vec![group.id]);
+        assert!(Path::new(&asset.path).exists());
+        assert_eq!(asset.ocr_state, "pending");
+        assert_eq!(asset.index_state, "pending");
+        assert_eq!(library.search("不想上班", "keyword", None, None)?.len(), 1);
+
+        library.update_ocr(&id, "今天不想上班，想休息")?;
+        // The old vector must not be returned after OCR changes its source text.
+        assert!(library
+            .search("休息", "semantic", None, Some(&[1.0, 0.0]))?
+            .is_empty());
+        let text = Library::search_text(&library.asset(&id)?);
+        library.put_embedding(&id, &text, &[1.0, 0.0])?;
+        drop(library);
+        let library = Library::open(&root)?;
+        let asset = library.asset(&id)?;
+        assert_eq!(asset.ocr_state, "ready");
+        assert_eq!(asset.index_state, "ready");
+        Ok(())
+    }
+
+    #[test]
+    fn model_changes_requeue_vectors_without_repeating_ocr() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("library");
+        let source = directory.path().join("meme.png");
+        image::RgbaImage::new(4, 4).save(&source)?;
+        let mut library = Library::open(&root)?;
+        assert_eq!(
+            library
+                .import_files(&[source.to_string_lossy().into_owned()], None)
+                .added,
+            1
+        );
+        let asset = library.next_pending(None)?.unwrap();
+        library.update_ocr(&asset.id, "收到")?;
+        library.save_asset(&asset.id, "举手敬礼", true, &[])?;
+        let text = Library::search_text(&library.asset(&asset.id)?);
+        library.put_embedding(&asset.id, &text, &[1.0, 0.0])?;
+        library
+            .db
+            .execute("UPDATE embeddings SET model='previous-model'", [])?;
+        drop(library);
+
+        let mut library = Library::open(&root)?;
+        let pending = library.next_pending(None)?.unwrap();
+        assert_eq!(pending.id, asset.id);
+        assert_eq!(pending.ocr_state, "ready");
+        assert_eq!(pending.ocr_text, "收到");
+        assert!(pending.favorite);
+        assert_eq!(pending.description, "举手敬礼");
+        assert!(library
+            .search("salute", "semantic", None, Some(&[1.0, 0.0]))?
+            .is_empty());
+        library.put_embedding(&pending.id, &text, &[0.0, 1.0])?;
+        drop(library);
+        assert_eq!(Library::open(&root)?.pending_count(None)?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn batch_indexing_publishes_each_item_and_resumes_only_pending_work() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("library");
+        let mut paths = Vec::new();
+        for index in 0..32 {
+            let path = directory.path().join(format!("meme-{index}.png"));
+            image::RgbaImage::from_pixel(4, 4, image::Rgba([index, 0, 0, 255])).save(&path)?;
+            paths.push(path.to_string_lossy().into_owned());
+        }
+        paths.push(
+            directory
+                .path()
+                .join("missing.png")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let mut library = Library::open(&root)?;
+        let report = library.import_files(&paths, None);
+        assert_eq!(report.added, 32);
+        assert_eq!(report.errors.len(), 1);
+        let first = library.next_pending(None)?.unwrap();
+        assert_eq!(first.name, "meme-0");
+        library.update_ocr(&first.id, "开心")?;
+        let text = Library::search_text(&library.asset(&first.id)?);
+        library.put_embedding(&first.id, &text, &[1.0, 0.0])?;
+        assert_eq!(library.pending_count(None)?, 31);
+        assert_eq!(
+            library
+                .search("happy", "semantic", None, Some(&[1.0, 0.0]))?
+                .len(),
+            1
+        );
+
+        let failed = library.next_pending(None)?.unwrap();
+        library.mark_error(&failed.id, true)?;
+        library.mark_error(&failed.id, false)?;
+        let next = library.next_pending(None)?.unwrap();
+        assert_ne!(next.id, failed.id);
+        drop(library);
+
+        let mut library = Library::open(&root)?;
+        assert_eq!(library.pending_count(None)?, 30);
+        assert_eq!(library.next_pending(None)?.unwrap().id, next.id);
+        assert_eq!(library.asset(&first.id)?.index_state, "ready");
+        library.delete_asset(&next.id)?;
+        // A job finishing after deletion must neither fail the queue nor resurrect the item.
+        library.put_embedding(&next.id, &Library::search_text(&next), &[1.0, 0.0])?;
+        assert!(library.find_asset(&next.id)?.is_none());
+        assert_eq!(library.pending_count(None)?, 29);
+        assert!(library.next_pending(Some(&first.id))?.is_none());
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Group {
+    pub id: i64,
+    pub name: String,
+    pub color: String,
+    pub count: usize,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    pub copy_size: u32,
+    pub allow_upscale: bool,
+    pub auto_index: bool,
+}
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            copy_size: 0,
+            allow_upscale: false,
+            auto_index: true,
+        }
+    }
+}
+#[derive(Serialize)]
+pub struct Snapshot {
+    pub assets: Vec<Asset>,
+    pub groups: Vec<Group>,
+    pub settings: Settings,
+}
+#[derive(Default, Serialize)]
+pub struct ImportReport {
+    pub added: usize,
+    pub duplicates: usize,
+    pub errors: Vec<String>,
+}
+
+pub struct Library {
+    pub root: PathBuf,
+    pub db: Connection,
+}
+impl Library {
+    pub fn open(root: &Path) -> Result<Self> {
+        for dir in ["originals", "thumbnails", "copies", "models"] {
+            fs::create_dir_all(root.join(dir))?;
+        }
+        let mut db = Connection::open(root.join("library.sqlite3"))?;
+        db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
+          CREATE TABLE IF NOT EXISTS assets (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, extension TEXT NOT NULL,
+            width INTEGER NOT NULL, height INTEGER NOT NULL, bytes INTEGER NOT NULL,
+            animated INTEGER NOT NULL, description TEXT NOT NULL DEFAULT '',
+            ocr_text TEXT NOT NULL DEFAULT '', ocr_state TEXT NOT NULL DEFAULT 'pending',
+            index_state TEXT NOT NULL DEFAULT 'pending', favorite INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL);
+          CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, color TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS asset_groups (asset_id TEXT REFERENCES assets(id) ON DELETE CASCADE,
+            group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE, PRIMARY KEY(asset_id,group_id));
+          CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS embeddings (asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+            model TEXT NOT NULL, source TEXT NOT NULL, vector BLOB NOT NULL);")?;
+        let version: u32 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version < 2 {
+            // Keep existing OCR text searchable until the downloaded v5 models replace it.
+            let tx = db.transaction()?;
+            tx.execute_batch(
+                "UPDATE assets SET ocr_state='pending',index_state='pending';
+              PRAGMA user_version=2;",
+            )?;
+            tx.commit()?;
+        }
+        // Model changes invalidate only vectors; keep existing OCR text and media.
+        let tx = db.transaction()?;
+        tx.execute(
+            "UPDATE assets SET index_state='pending' WHERE id IN
+             (SELECT asset_id FROM embeddings WHERE model<>?1)",
+            [crate::intelligence::MODEL_VERSION],
+        )?;
+        tx.execute(
+            "DELETE FROM embeddings WHERE model<>?1",
+            [crate::intelligence::MODEL_VERSION],
+        )?;
+        tx.execute_batch(
+            "CREATE INDEX IF NOT EXISTS assets_pending ON assets(created_at)
+            WHERE ocr_state='pending' OR index_state='pending';",
+        )?;
+        tx.commit()?;
+        Ok(Self {
+            root: root.to_path_buf(),
+            db,
+        })
+    }
+    pub fn settings(&self) -> Result<Settings> {
+        let json: Option<String> = self
+            .db
+            .query_row("SELECT value FROM settings WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        match json {
+            Some(json) => Ok(serde_json::from_str(&json)?),
+            None => Ok(Settings::default()),
+        }
+    }
+    pub fn save_settings(&self, settings: Settings) -> Result<()> {
+        if settings.copy_size > 4096 {
+            return Err("复制最长边不能超过 4096 px".into());
+        }
+        self.db.execute(
+            "INSERT INTO settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value",
+            [serde_json::to_string(&settings)?],
+        )?;
+        Ok(())
+    }
+    fn read_asset(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<Asset> {
+        let id: String = row.get(0)?;
+        let format: String = row.get(2)?;
+        Ok(Asset {
+            path: self
+                .root
+                .join("originals")
+                .join(format!("{id}.{format}"))
+                .to_string_lossy()
+                .into_owned(),
+            thumbnail: self
+                .root
+                .join("thumbnails")
+                .join(format!("{id}.png"))
+                .to_string_lossy()
+                .into_owned(),
+            id,
+            name: row.get(1)?,
+            format,
+            width: row.get(3)?,
+            height: row.get(4)?,
+            bytes: row.get(5)?,
+            animated: row.get(6)?,
+            description: row.get(7)?,
+            ocr_text: row.get(8)?,
+            ocr_state: row.get(9)?,
+            index_state: row.get(10)?,
+            favorite: row.get(11)?,
+            created_at: row.get(12)?,
+            groups: vec![],
+            score: None,
+        })
+    }
+    pub fn assets(&self) -> Result<Vec<Asset>> {
+        let mut stmt = self.db.prepare("SELECT id,name,extension,width,height,bytes,animated,description,ocr_text,ocr_state,index_state,favorite,created_at FROM assets ORDER BY created_at DESC,rowid DESC")?;
+        let mut assets = stmt
+            .query_map([], |row| self.read_asset(row))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut memberships = self
+            .db
+            .prepare("SELECT asset_id,group_id FROM asset_groups")?;
+        let positions: HashMap<_, _> = assets
+            .iter()
+            .enumerate()
+            .map(|(index, asset)| (asset.id.clone(), index))
+            .collect();
+        for pair in memberships.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })? {
+            let (id, group) = pair?;
+            if let Some(&index) = positions.get(&id) {
+                assets[index].groups.push(group);
+            }
+        }
+        Ok(assets)
+    }
+    pub fn asset(&self, id: &str) -> Result<Asset> {
+        self.find_asset(id)?.ok_or_else(|| "表情不存在".into())
+    }
+    pub fn find_asset(&self, id: &str) -> Result<Option<Asset>> {
+        let asset = self.db.query_row(
+            "SELECT id,name,extension,width,height,bytes,animated,description,ocr_text,ocr_state,index_state,favorite,created_at FROM assets WHERE id=?1",
+            [id], |row| self.read_asset(row),
+        ).optional()?;
+        if let Some(mut asset) = asset {
+            asset.groups = self
+                .db
+                .prepare("SELECT group_id FROM asset_groups WHERE asset_id=?1")?
+                .query_map([id], |row| row.get(0))?
+                .collect::<std::result::Result<_, _>>()?;
+            Ok(Some(asset))
+        } else {
+            Ok(None)
+        }
+    }
+    pub fn pending_count(&self, only: Option<&str>) -> Result<usize> {
+        Ok(self.db.query_row(
+            "SELECT COUNT(*) FROM assets WHERE (ocr_state='pending' OR index_state='pending') AND (?1 IS NULL OR id=?1)",
+            [only], |row| row.get(0),
+        )?)
+    }
+    pub fn next_pending(&self, only: Option<&str>) -> Result<Option<Asset>> {
+        let id: Option<String> = self.db.query_row(
+            "SELECT id FROM assets WHERE (ocr_state='pending' OR index_state='pending') AND (?1 IS NULL OR id=?1)
+             ORDER BY created_at,rowid LIMIT 1",
+            [only], |row| row.get(0),
+        ).optional()?;
+        id.map(|id| self.asset(&id)).transpose()
+    }
+    pub fn groups(&self) -> Result<Vec<Group>> {
+        Ok(self.db.prepare("SELECT g.id,g.name,g.color,COUNT(ag.asset_id) FROM groups g LEFT JOIN asset_groups ag ON ag.group_id=g.id GROUP BY g.id ORDER BY g.id")?
+          .query_map([], |row| Ok(Group { id: row.get(0)?, name: row.get(1)?, color: row.get(2)?, count: row.get(3)? }))?
+          .collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+    pub fn snapshot(&self) -> Result<Snapshot> {
+        Ok(Snapshot {
+            assets: self.assets()?,
+            groups: self.groups()?,
+            settings: self.settings()?,
+        })
+    }
+    pub fn save_group(&self, id: Option<i64>, name: &str, color: &str) -> Result<Group> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 40 {
+            return Err("分组名称应为 1–40 个字符".into());
+        }
+        if color.len() != 7
+            || !color.starts_with('#')
+            || !color[1..].bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err("无效的分组颜色".into());
+        }
+        let id = match id {
+            Some(id) => {
+                if self.db.execute(
+                    "UPDATE groups SET name=?1,color=?2 WHERE id=?3",
+                    params![name, color, id],
+                )? == 0
+                {
+                    return Err("分组不存在".into());
+                }
+                id
+            }
+            None => {
+                self.db.execute(
+                    "INSERT INTO groups(name,color) VALUES(?1,?2)",
+                    params![name, color],
+                )?;
+                self.db.last_insert_rowid()
+            }
+        };
+        Ok(self
+            .groups()?
+            .into_iter()
+            .find(|group| group.id == id)
+            .ok_or("分组不存在")?)
+    }
+    pub fn delete_group(&self, id: i64) -> Result<()> {
+        self.db.execute("DELETE FROM groups WHERE id=?1", [id])?;
+        Ok(())
+    }
+    pub fn save_asset(
+        &mut self,
+        id: &str,
+        description: &str,
+        favorite: bool,
+        groups: &[i64],
+    ) -> Result<()> {
+        if description.chars().count() > 4000 {
+            return Err("描述不能超过 4000 个字符".into());
+        }
+        let tx = self.db.transaction()?;
+        let changed = tx.execute(
+            "UPDATE assets SET
+               index_state=CASE WHEN description<>?1 THEN 'pending' ELSE index_state END,
+               description=?1, favorite=?2 WHERE id=?3",
+            params![description.trim(), favorite, id],
+        )?;
+        if changed == 0 {
+            return Err("表情不存在".into());
+        }
+        tx.execute("DELETE FROM asset_groups WHERE asset_id=?1", [id])?;
+        for group in groups {
+            tx.execute(
+                "INSERT OR IGNORE INTO asset_groups VALUES(?1,?2)",
+                params![id, group],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn delete_asset(&self, id: &str) -> Result<()> {
+        let asset = self.asset(id)?;
+        self.db.execute("DELETE FROM assets WHERE id=?1", [id])?;
+        // Copy artifacts remain valid for consumers that have not pasted yet.
+        for path in [&asset.path, &asset.thumbnail] {
+            if Path::new(path).exists() {
+                fs::remove_file(path)?;
+            }
+        }
+        Ok(())
+    }
+    pub fn import_files(&mut self, paths: &[String], group: Option<i64>) -> ImportReport {
+        let mut report = ImportReport::default();
+        for path in paths {
+            match self.import_one(Path::new(path), group) {
+                Ok(true) => report.added += 1,
+                Ok(false) => report.duplicates += 1,
+                Err(error) => report.errors.push(format!(
+                    "{}：{error}",
+                    Path::new(path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                )),
+            }
+        }
+        report
+    }
+    fn import_one(&mut self, path: &Path, group: Option<i64>) -> Result<bool> {
+        if !path.is_file() {
+            return Err("请拖入图片文件，暂不支持文件夹".into());
+        }
+        if fs::metadata(path)?.len() > 100 * 1024 * 1024 {
+            return Err("单张图片不能超过 100 MB".into());
+        }
+        let bytes = fs::read(path)?;
+        let id: String = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let exists: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)",
+            [&id],
+            |row| row.get(0),
+        )?;
+        if exists {
+            if let Some(group) = group {
+                self.db.execute(
+                    "INSERT OR IGNORE INTO asset_groups VALUES(?1,?2)",
+                    params![id, group],
+                )?;
+            }
+            return Ok(false);
+        }
+        let info = media::inspect(&bytes)?;
+        let original = self
+            .root
+            .join("originals")
+            .join(format!("{id}.{}", info.extension));
+        let thumbnail = self.root.join("thumbnails").join(format!("{id}.png"));
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+        let tx = self.db.transaction()?;
+        tx.execute(
+            "INSERT INTO assets(id,name,extension,width,height,bytes,animated,created_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                id,
+                path.file_stem().unwrap_or_default().to_string_lossy(),
+                info.extension,
+                info.preview.width(),
+                info.preview.height(),
+                bytes.len() as u64,
+                info.animated,
+                now
+            ],
+        )?;
+        if let Some(group) = group {
+            tx.execute("INSERT INTO asset_groups VALUES(?1,?2)", params![id, group])?;
+        }
+        let result = (|| -> Result<()> {
+            fs::write(&original, &bytes)?;
+            info.preview.thumbnail(384, 384).save(&thumbnail)?;
+            tx.commit()?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            for file in [&original, &thumbnail] {
+                if file.exists() {
+                    fs::remove_file(file)?;
+                }
+            }
+            return Err(error);
+        }
+        Ok(true)
+    }
+    pub fn update_ocr(&self, id: &str, text: &str) -> Result<()> {
+        self.db.execute(
+            "UPDATE assets SET ocr_text=?1,ocr_state='ready',index_state='pending' WHERE id=?2",
+            params![text, id],
+        )?;
+        Ok(())
+    }
+    pub fn mark_error(&self, id: &str, ocr: bool) -> Result<()> {
+        self.db.execute(
+            if ocr {
+                "UPDATE assets SET ocr_state='error' WHERE id=?1"
+            } else {
+                "UPDATE assets SET index_state='error' WHERE id=?1"
+            },
+            [id],
+        )?;
+        Ok(())
+    }
+    pub fn put_embedding(&mut self, id: &str, source: &str, vector: &[f32]) -> Result<()> {
+        let Some(current) = self.find_asset(id)? else {
+            return Ok(());
+        };
+        if Self::search_text(&current) != source {
+            return Ok(());
+        }
+        let bytes: Vec<u8> = vector
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        let tx = self.db.transaction()?;
+        tx.execute("INSERT INTO embeddings VALUES(?1,?2,?3,?4) ON CONFLICT(asset_id) DO UPDATE SET model=excluded.model,source=excluded.source,vector=excluded.vector",
+          params![id,crate::intelligence::MODEL_VERSION,source,bytes])?;
+        tx.execute("UPDATE assets SET index_state='ready' WHERE id=?1", [id])?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn search_text(asset: &Asset) -> String {
+        format!("{}\n{}\n{}", asset.name, asset.description, asset.ocr_text)
+    }
+    pub fn search(
+        &self,
+        query: &str,
+        mode: &str,
+        group: Option<i64>,
+        embedding: Option<&[f32]>,
+    ) -> Result<Vec<Asset>> {
+        if !["hybrid", "keyword", "semantic"].contains(&mode) {
+            return Err("无效的搜索模式".into());
+        }
+        let query = query.trim().to_lowercase();
+        let mut assets: Vec<_> = self
+            .assets()?
+            .into_iter()
+            .filter(|a| group.is_none_or(|id| a.groups.contains(&id)))
+            .collect();
+        if query.is_empty() {
+            return Ok(assets);
+        }
+        let mut keyword = vec![];
+        let mut semantic = vec![];
+        for (index, asset) in assets.iter().enumerate() {
+            if Self::search_text(asset).to_lowercase().contains(&query) {
+                keyword.push(index);
+            }
+            if let Some(q) = embedding {
+                let stored: Option<(String, Vec<u8>)> = self
+                    .db
+                    .query_row(
+                        "SELECT source,vector FROM embeddings WHERE asset_id=?1 AND model=?2",
+                        params![asset.id, crate::intelligence::MODEL_VERSION],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                if let Some((source, bytes)) = stored {
+                    if source != Self::search_text(asset) {
+                        continue;
+                    }
+                    let v: Vec<f32> = bytes
+                        .chunks_exact(4)
+                        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                        .collect();
+                    if q.len() == v.len() {
+                        semantic.push((index, q.iter().zip(v).map(|(a, b)| a * b).sum::<f32>()));
+                    }
+                }
+            }
+        }
+        semantic.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let mut scores = std::collections::HashMap::<usize, f32>::new();
+        if mode != "semantic" {
+            for (rank, index) in keyword.into_iter().enumerate() {
+                *scores.entry(index).or_default() += 1.0 / (60.0 + rank as f32);
+            }
+        }
+        if mode != "keyword" {
+            for (rank, (index, _)) in semantic.into_iter().take(60).enumerate() {
+                *scores.entry(index).or_default() += 1.0 / (60.0 + rank as f32);
+            }
+        }
+        for (index, asset) in assets.iter_mut().enumerate() {
+            asset.score = scores.get(&index).copied();
+        }
+        assets.retain(|a| a.score.is_some());
+        assets.sort_by(|a, b| b.score.unwrap().total_cmp(&a.score.unwrap()));
+        assets.truncate(100);
+        Ok(assets)
+    }
+}

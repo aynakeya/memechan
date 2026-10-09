@@ -1,0 +1,40 @@
+[package]
+name = "memechan"
+version = "0.1.0"
+description = "A local-first meme library"
+edition = "2021"
+rust-version = "1.90"
+
+[lib]
+name = "memechan_core"
+
+[[bin]]
+name = "memechan"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = ["desktop"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:clipboard-rs"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", optional = true, features = [] }
+
+[dependencies]
+tauri = { version = "2.12.1", optional = true, features = ["protocol-asset"] }
+tauri-plugin-dialog = { version = "2.8.1", optional = true }
+clipboard-rs = { version = "0.3.5", optional = true, features = ["wayland"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "fallible_uint"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+gif = "0.14.2"
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "rustls", "json"] }
+tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
+# paddle-ocr-rs 0.6.1 accesses Session.inputs, which is private in newer ort releases.
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs"] }
+paddle-ocr-rs = { version = "=0.6.1", default-features = false }
+
+[dev-dependencies]
+tempfile = "3.27.0"

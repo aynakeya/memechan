@@ -1,0 +1,88 @@
+import { mockIPC, mockWindows, mockConvertFileSrc } from '@tauri-apps/api/mocks'
+import { emit } from '@tauri-apps/api/event'
+
+window.isTauri = true
+mockWindows('main')
+mockConvertFileSrc('windows')
+window.testEmit = emit
+
+const names = ['今天也要开心', '正在认真摸鱼', '谢谢老板', '这合理吗', '让我静静', '好耶！']
+const faces = ['◡', '﹏', 'ᴗ', '○', '︿', '▽']
+const assets = names.map((name, i) => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><circle cx="128" cy="108" r="65" fill="${['#e7cd85', '#afc6ab', '#e3b9a2'][i % 3]}"/><circle cx="105" cy="96" r="5" fill="#45533f"/><circle cx="150" cy="96" r="5" fill="#45533f"/><text x="128" y="144" text-anchor="middle" font-size="54" fill="#45533f">${faces[i]}</text><text x="128" y="220" text-anchor="middle" font-size="20" fill="#45533f">${name}</text></svg>`
+  const path = `data:image/svg+xml,${encodeURIComponent(svg)}`
+  return {
+    id: String(i),
+    name,
+    path,
+    thumbnail: path,
+    format: i === 1 ? 'gif' : 'png',
+    width: 256,
+    height: 256,
+    bytes: 20480,
+    animated: i === 1,
+    description: i === 1 ? '假装忙碌，其实想下班' : '',
+    ocrText: name,
+    ocrState: 'ready',
+    indexState: 'ready',
+    favorite: i === 0,
+    createdAt: Date.now(),
+    groups: i < 3 ? [1] : [],
+    score: null,
+  }
+})
+const settings = { copySize: 0, allowUpscale: false, autoIndex: true }
+window.testCalls = []
+window.testModelImportResult = true
+window.testModel = {
+  ready: true,
+  directory: '/local/models',
+  missing: [],
+  job: { running: false, done: 0, total: 0, message: '', error: null },
+  import: { running: false, done: 0, total: 0, message: '', error: null },
+}
+
+mockIPC(
+  async (command, args) => {
+    window.testCalls.push({ command, args })
+    if (command === 'snapshot')
+      return JSON.parse(
+        JSON.stringify({
+          assets,
+          groups: [{ id: 1, name: '打工日常', color: '#88966d', count: 3 }],
+          settings,
+        }),
+      )
+    if (command === 'model_status') return window.structuredClone(window.testModel)
+    if (command === 'import_models') {
+      if (window.testModelImportResult) {
+        window.testModel.ready = true
+        window.testModel.missing = []
+        window.testModel.job.message = '整理完成'
+      }
+      return window.testModelImportResult
+    }
+    if (command === 'save_asset')
+      return Object.assign(
+        assets.find((a) => a.id === args.id),
+        { description: args.description, favorite: args.favorite, groups: args.groups },
+      )
+    if (command === 'copy_asset') return '已复制图片'
+    if (command === 'save_settings') return Object.assign(settings, args.settings)
+    if (command === 'search') throw new Error('测试：本地模型未就绪')
+    if (command === 'import_files') {
+      if (args.paths.length > 1) {
+        Object.assign(window.testModel.import, { running: true, done: 0, total: args.paths.length })
+        for (const path of args.paths) {
+          assets.push({ ...assets[0], id: path, name: path, groups: [] })
+          window.testModel.import.done++
+          await new Promise((resolve) => window.setTimeout(resolve, 2000))
+        }
+        window.testModel.import.running = false
+      }
+      return { added: args.paths.length, duplicates: 0, errors: [] }
+    }
+    throw new Error('未模拟的桌面命令：' + command)
+  },
+  { shouldMockEvents: true },
+)

@@ -1,0 +1,817 @@
+{
+  "description": "Synthetic meme-description retrieval pilot, authored before model scoring. Text-only; no actual user images or API outputs. Relevance grades: 2=directly relevant, 1=acceptable secondary result. Frozen labels are shared across all models.",
+  "instruction": "Given a description of a reaction, emotion, or action, retrieve the most relevant meme.",
+  "documents": [
+    {
+      "id": "salute",
+      "text": "画面：制服少女站直身体，右手五指并拢举到眉边，认真地向前方致意。文字：收到！"
+    },
+    {
+      "id": "salute_en",
+      "text": "A tiny penguin stands upright and gives a crisp military salute, one flipper raised to its forehead. Caption: Yes, captain!"
+    },
+    {
+      "id": "wave",
+      "text": "画面：女孩伸出右手在肩膀上方左右摆动，笑着与朋友告别。文字：明天见。"
+    },
+    {
+      "id": "bow",
+      "text": "画面：小人双手贴着裤缝，上半身向前弯了九十度，低头郑重地表达歉意。文字：对不起。"
+    },
+    {
+      "id": "roll",
+      "text": "画面：猫耳女孩躺在地板上，身体向左翻一圈又向右翻一圈，边翻边蹬腿撒娇。文字：不嘛不嘛！"
+    },
+    {
+      "id": "rofl_en",
+      "text": "A chibi character is rolling on the floor laughing, holding their belly and kicking their feet. It is a reaction to a hilarious joke."
+    },
+    {
+      "id": "lie",
+      "text": "画面：小企鹅平躺在沙发上，四肢摊开一动不动，眼睛望着天花板。文字：今天就这样吧。"
+    },
+    {
+      "id": "sleep",
+      "text": "画面：少女闭着眼睛缩在被窝里，头旁边有 ZZZ，正在熟睡。文字：晚安。"
+    },
+    {
+      "id": "cry",
+      "text": "画面：少女的眼泪沿着脸颊流下，嘴角向下，手背擦着眼睛，看起来非常难过。文字：呜呜。"
+    },
+    {
+      "id": "cry_en",
+      "text": "A sad anime girl sobs with her face buried in both hands. Tears soak her sleeves after her friend leaves."
+    },
+    {
+      "id": "tears_joy",
+      "text": "画面：小人捧腹大笑，眼角挤出眼泪，嘴巴张得很大。文字：哈哈哈哈笑死。"
+    },
+    {
+      "id": "hold_tears",
+      "text": "画面：女孩抿紧嘴唇抬头望天，眼眶发红但没有掉下眼泪，努力忍住情绪。文字：我没事。"
+    },
+    {
+      "id": "kneel",
+      "text": "画面：小人两条腿弯曲，双膝跪在地上，两手合在胸前请求帮助。文字：求你了。"
+    },
+    {
+      "id": "applaud",
+      "text": "画面：少女连续把两只手掌拍到一起，脸上充满佩服。文字：太厉害了！"
+    },
+    {
+      "id": "thumb",
+      "text": "画面：企鹅握着拳头只伸出一根大拇指，认真肯定对方。文字：做得好。"
+    },
+    {
+      "id": "facepalm",
+      "text": "画面：女孩闭着眼，把手掌盖在额头和眼睛上，无奈地低下头。文字：我真服了。"
+    },
+    {
+      "id": "shrug",
+      "text": "画面：小人耸起双肩，两只手摊开朝上，表示自己也不知道。文字：这我哪知道。"
+    },
+    {
+      "id": "eye_roll",
+      "text": "画面：少女把眼球翻向上方，露出大片眼白，神情不屑。文字：呵呵。"
+    },
+    {
+      "id": "peek",
+      "text": "画面：猫耳女孩躲在门框后面，只露出半张脸和一只眼睛，偷偷观察。文字：路过。"
+    },
+    {
+      "id": "hug",
+      "text": "画面：白发女孩把一只圆滚滚的企鹅紧紧搂在怀里，脸贴着企鹅，神情满足。描述：想贴贴，喜欢你。"
+    },
+    {
+      "id": "comfort_en",
+      "text": "One girl gently wraps her arms around a crying friend and pats her back. Caption: You are not alone."
+    },
+    {
+      "id": "run",
+      "text": "画面：小企鹅转过身飞快迈腿跑远，身后扬起烟尘。文字：溜了溜了。"
+    },
+    {
+      "id": "angry_table",
+      "text": "画面：少女一只手握拳重重砸向桌面，桌上的杯子跳了起来，眉毛紧锁。文字：气死我了！"
+    },
+    {
+      "id": "flip_table",
+      "text": "画面：小人用双手抬起桌子的一边，把整张桌子掀翻，盘子飞到空中。文字：不玩了！"
+    },
+    {
+      "id": "yawn",
+      "text": "画面：女孩眼睛半闭，嘴巴张大，伸手挡在嘴前，显得非常困。文字：哈欠。"
+    },
+    {
+      "id": "pout",
+      "text": "画面：少女鼓起两边脸颊，双臂交叉放在胸前，扭过头不看人。文字：哼！"
+    },
+    {
+      "id": "nod",
+      "text": "画面：企鹅的脑袋上下移动，连续点了三次头，表示赞同。文字：嗯嗯。"
+    },
+    {
+      "id": "shake_head",
+      "text": "画面：少女的头部快速左右摆动，双手也朝外摆。文字：不行不行。"
+    },
+    {
+      "id": "wink",
+      "text": "画面：女孩闭上一只眼睛，另一只眼睛看向前方，嘴角轻轻扬起。文字：你懂的。"
+    },
+    {
+      "id": "dance",
+      "text": "画面：小人跟着音乐左右扭腰，双臂在空中挥动，脚步交替移动。文字：好开心。"
+    },
+    {
+      "id": "cheer",
+      "text": "画面：少女双脚离地跳起来，两只拳头高高举过头顶。文字：赢啦！"
+    },
+    {
+      "id": "point",
+      "text": "画面：企鹅伸出一只翅膀指向右边的另一个人，一脸认真。文字：就是他。"
+    },
+    {
+      "id": "headbang",
+      "text": "画面：小人把额头一次次撞向墙面，身旁有撞击线。文字：我为什么要答应。"
+    },
+    {
+      "id": "stomp",
+      "text": "画面：少女站在原地用脚连续重重跺地，双拳攥紧，头上冒出怒气。文字：烦死了。"
+    },
+    {
+      "id": "crawl",
+      "text": "画面：一个疲惫小人趴在地面，双手向前拖动身体，缓慢挪向门口。文字：还能再坚持一下。"
+    },
+    {
+      "id": "pat_head",
+      "text": "画面：一只手轻轻落在女孩头顶，来回抚摸她的头发，女孩露出放松表情。文字：乖。"
+    },
+    {
+      "id": "cover_ears",
+      "text": "画面：女孩用两只手紧紧捂住耳朵，闭着眼睛摇头。文字：不听不听。"
+    },
+    {
+      "id": "cover_mouth",
+      "text": "画面：小人用双手捂住嘴巴，努力不让笑声漏出来，眼睛弯成月牙。文字：我没笑。"
+    },
+    {
+      "id": "burnout",
+      "text": "画面：打工人瘫在电脑前，眼神空洞，脸贴着桌面。文字：又要加班。描述：工作太累，只想早点回家休息。"
+    },
+    {
+      "id": "busy",
+      "text": "画面：小人认真盯着屏幕飞快敲键盘，桌面上堆着文件。文字：正在处理，稍等。"
+    },
+    {
+      "id": "slack",
+      "text": "画面：办公室里的人偷偷把游戏窗口藏在表格后面，看到老板就切回工作界面。文字：忙着呢。"
+    },
+    {
+      "id": "thanks",
+      "text": "画面：女孩双手捧着对方送来的礼物，眼睛亮晶晶的，笑得很开心。文字：谢谢你，真的帮大忙了。"
+    },
+    {
+      "id": "sarcastic_thanks",
+      "text": "画面：员工盯着老板新发来的加班通知，挤出僵硬笑容，眼神麻木。文字：谢谢老板，您可真会心疼人。描述：反话，抱怨又被安排工作。"
+    },
+    {
+      "id": "forced_agree",
+      "text": "画面：小人挤出勉强的笑容，手指比出 OK，额头青筋明显。文字：好的呢。描述：表面答应，心里非常不情愿。"
+    },
+    {
+      "id": "agree",
+      "text": "画面：女孩自信地笑着点头，伸手和同伴击掌。文字：没问题，我也这么想！"
+    },
+    {
+      "id": "speechless",
+      "text": "画面：企鹅面无表情地望着前方，背景一片空白，头顶只有三个点。文字：……。描述：无话可说，懒得吐槽。"
+    },
+    {
+      "id": "shocked",
+      "text": "画面：女孩瞪大双眼，嘴巴张成圆形，手里的杯子掉落。文字：什么？！"
+    },
+    {
+      "id": "moneyless",
+      "text": "画面：企鹅把钱包翻过来，里面只有一枚硬币，旁边飘过一片落叶。文字：余额不足。"
+    },
+    {
+      "id": "rich",
+      "text": "画面：小人戴着墨镜，双手挥舞钞票，脚边堆满金币。文字：随便买。"
+    },
+    {
+      "id": "anxious",
+      "text": "画面：少女满头冷汗不停搓手，盯着手机上的倒计时。文字：怎么还没出结果。"
+    },
+    {
+      "id": "relieved",
+      "text": "画面：小人长长呼出一口气，擦掉额头的汗水，肩膀放松下来。文字：总算结束了。"
+    },
+    {
+      "id": "embarrassed",
+      "text": "画面：女孩低头脸红，脚趾蜷缩，手指绞在一起。文字：当我没说。描述：刚刚在群里发错消息了。"
+    },
+    {
+      "id": "jealous",
+      "text": "画面：小人看着别人拿到奖品，笑容僵硬，身旁画着一颗柠檬。文字：我一点都不羡慕。"
+    },
+    {
+      "id": "hungry",
+      "text": "画面：企鹅盯着餐盘流口水，肚子咕咕叫。文字：什么时候开饭。"
+    },
+    {
+      "id": "ocr_work",
+      "text": "OCR：今 天 不 想 上 班。描述：打工人揉着眼睛，趴在办公桌上。"
+    },
+    {
+      "id": "ocr_poor",
+      "text": "OCR：没 钱 啦！描述：小企鹅举着空钱包，表情沮丧。"
+    },
+    {
+      "id": "ocr_birthday",
+      "text": "OCR：生曰快樂！描述：少女端着插满蜡烛的蛋糕，向朋友送上祝福。"
+    },
+    {
+      "id": "ocr_thanks",
+      "text": "OCR：谢 谢 大 佬。描述：小人把一束花递给帮忙解决问题的人。"
+    },
+    {
+      "id": "salute_ja",
+      "text": "制服の女の子が右手を額に当てて敬礼している。真剣な表情で「了解しました！」と言う。"
+    },
+    {
+      "id": "roll_ja",
+      "text": "床の上で左右に転がりながら手足をばたばたさせる女の子。「やだやだ」と駄々をこねている。"
+    },
+    {
+      "id": "cry_ja",
+      "text": "女の子が目から涙を流し、ハンカチで顔を拭いている。悲しくて泣いている。"
+    },
+    {
+      "id": "hug_ja",
+      "text": "白い髪の女の子が小さなペンギンを両腕で抱きしめている。二人とも安心した表情。"
+    }
+  ],
+  "queries": [
+    {
+      "category": "动作",
+      "text": "敬礼",
+      "relevant": {
+        "salute": 2,
+        "salute_en": 2,
+        "salute_ja": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "来张抬手向长官致意的",
+      "relevant": {
+        "salute": 2,
+        "salute_en": 2,
+        "salute_ja": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "打滚",
+      "relevant": {
+        "roll": 2,
+        "roll_ja": 2,
+        "rofl_en": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "躺地上翻来翻去撒娇",
+      "relevant": {
+        "roll": 2,
+        "roll_ja": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "哭",
+      "relevant": {
+        "cry": 2,
+        "cry_en": 2,
+        "cry_ja": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "眼泪止不住，想哭一场",
+      "relevant": {
+        "cry": 2,
+        "cry_en": 2,
+        "cry_ja": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "挥手告别",
+      "relevant": {
+        "wave": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "弯腰道歉",
+      "relevant": {
+        "bow": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "双手拍巴掌",
+      "relevant": {
+        "applaud": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "跪下来求求你",
+      "relevant": {
+        "kneel": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "给你一个大拇指",
+      "relevant": {
+        "thumb": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "用手盖住脸不想看",
+      "relevant": {
+        "facepalm": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "耸肩摊手",
+      "relevant": {
+        "shrug": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "翻白眼",
+      "relevant": {
+        "eye_roll": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "躲在旁边偷偷看",
+      "relevant": {
+        "peek": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "抱着企鹅贴贴",
+      "relevant": {
+        "hug": 2,
+        "hug_ja": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "拔腿就跑",
+      "relevant": {
+        "run": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "气得一拳锤桌子",
+      "relevant": {
+        "angry_table": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "把桌子都掀了",
+      "relevant": {
+        "flip_table": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "打哈欠",
+      "relevant": {
+        "yawn": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "鼓着脸闹别扭",
+      "relevant": {
+        "pout": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "上下点脑袋",
+      "relevant": {
+        "nod": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "摇头拒绝",
+      "relevant": {
+        "shake_head": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "朝我眨一只眼",
+      "relevant": {
+        "wink": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "跟音乐一起扭起来",
+      "relevant": {
+        "dance": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "赢了以后举手跳起来",
+      "relevant": {
+        "cheer": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "脑袋撞墙",
+      "relevant": {
+        "headbang": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "原地跺脚发脾气",
+      "relevant": {
+        "stomp": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "趴着往前爬",
+      "relevant": {
+        "crawl": 2
+      }
+    },
+    {
+      "category": "动作",
+      "text": "摸摸头",
+      "relevant": {
+        "pat_head": 2
+      }
+    },
+    {
+      "category": "情绪",
+      "text": "难过得绷不住了",
+      "relevant": {
+        "cry": 2,
+        "cry_en": 2,
+        "cry_ja": 2
+      }
+    },
+    {
+      "category": "情绪",
+      "text": "委屈但是强忍着",
+      "relevant": {
+        "hold_tears": 2
+      }
+    },
+    {
+      "category": "情绪",
+      "text": "我人都傻了",
+      "relevant": {
+        "shocked": 2
+      }
+    },
+    {
+      "category": "情绪",
+      "text": "已经无力吐槽",
+      "relevant": {
+        "speechless": 2,
+        "facepalm": 2
+      }
+    },
+    {
+      "category": "情绪",
+      "text": "紧张得坐立不安",
+      "relevant": {
+        "anxious": 2
+      }
+    },
+    {
+      "category": "情绪",
+      "text": "终于松了一口气",
+      "relevant": {
+        "relieved": 2
+      }
+    },
+    {
+      "category": "情绪",
+      "text": "尴尬得脚趾抠地",
+      "relevant": {
+        "embarrassed": 2
+      }
+    },
+    {
+      "category": "情绪",
+      "text": "酸了，凭什么他有我没有",
+      "relevant": {
+        "jealous": 2
+      }
+    },
+    {
+      "category": "情绪",
+      "text": "困到睁不开眼",
+      "relevant": {
+        "yawn": 2,
+        "sleep": 1,
+        "burnout": 1
+      }
+    },
+    {
+      "category": "情绪",
+      "text": "饿得前胸贴后背",
+      "relevant": {
+        "hungry": 2
+      }
+    },
+    {
+      "category": "语用",
+      "text": "阴阳怪气地谢谢老板",
+      "relevant": {
+        "sarcastic_thanks": 2
+      }
+    },
+    {
+      "category": "语用",
+      "text": "嘴上说好，心里一万个不愿意",
+      "relevant": {
+        "forced_agree": 2
+      }
+    },
+    {
+      "category": "语用",
+      "text": "假装在努力工作",
+      "relevant": {
+        "slack": 2
+      }
+    },
+    {
+      "category": "语用",
+      "text": "这个班谁爱上谁上",
+      "relevant": {
+        "burnout": 2,
+        "ocr_work": 2
+      }
+    },
+    {
+      "category": "语用",
+      "text": "安慰刚失去朋友的人",
+      "relevant": {
+        "comfort_en": 2
+      }
+    },
+    {
+      "category": "语用",
+      "text": "真心感谢朋友帮我解决麻烦",
+      "relevant": {
+        "thanks": 2,
+        "ocr_thanks": 2
+      }
+    },
+    {
+      "category": "语用",
+      "text": "溜了，这事跟我没关系",
+      "relevant": {
+        "run": 2
+      }
+    },
+    {
+      "category": "语用",
+      "text": "买不起，钱包比脸还干净",
+      "relevant": {
+        "moneyless": 2,
+        "ocr_poor": 2
+      }
+    },
+    {
+      "category": "易混淆",
+      "text": "笑出了眼泪，不是伤心",
+      "relevant": {
+        "tears_joy": 2,
+        "rofl_en": 1
+      }
+    },
+    {
+      "category": "易混淆",
+      "text": "难过地流泪，不要哈哈大笑",
+      "relevant": {
+        "cry": 2,
+        "cry_en": 2,
+        "cry_ja": 2
+      }
+    },
+    {
+      "category": "易混淆",
+      "text": "只是躺着摆烂，没有翻滚",
+      "relevant": {
+        "lie": 2
+      }
+    },
+    {
+      "category": "易混淆",
+      "text": "笑到满地打滚",
+      "relevant": {
+        "rofl_en": 2
+      }
+    },
+    {
+      "category": "易混淆",
+      "text": "憋着眼泪还没哭出来",
+      "relevant": {
+        "hold_tears": 2
+      }
+    },
+    {
+      "category": "易混淆",
+      "text": "伸手向别人告别，不是向长官行礼",
+      "relevant": {
+        "wave": 2
+      }
+    },
+    {
+      "category": "易混淆",
+      "text": "捂耳朵表示不想听",
+      "relevant": {
+        "cover_ears": 2
+      }
+    },
+    {
+      "category": "易混淆",
+      "text": "捂嘴偷笑",
+      "relevant": {
+        "cover_mouth": 2
+      }
+    },
+    {
+      "category": "跨语言",
+      "text": "a girl saluting",
+      "relevant": {
+        "salute": 2,
+        "salute_en": 2,
+        "salute_ja": 2
+      }
+    },
+    {
+      "category": "跨语言",
+      "text": "throwing a tantrum and rolling on the floor",
+      "relevant": {
+        "roll": 2,
+        "roll_ja": 2
+      }
+    },
+    {
+      "category": "跨语言",
+      "text": "crying with tears running down her cheeks",
+      "relevant": {
+        "cry": 2,
+        "cry_en": 2,
+        "cry_ja": 2
+      }
+    },
+    {
+      "category": "跨语言",
+      "text": "a white-haired girl cuddling a penguin",
+      "relevant": {
+        "hug": 2,
+        "hug_ja": 2
+      }
+    },
+    {
+      "category": "跨语言",
+      "text": "sarcastically thanking my boss for more overtime",
+      "relevant": {
+        "sarcastic_thanks": 2
+      }
+    },
+    {
+      "category": "跨语言",
+      "text": "敬礼する女の子",
+      "relevant": {
+        "salute": 2,
+        "salute_en": 2,
+        "salute_ja": 2
+      }
+    },
+    {
+      "category": "跨语言",
+      "text": "床でごろごろ駄々をこねる",
+      "relevant": {
+        "roll": 2,
+        "roll_ja": 2
+      }
+    },
+    {
+      "category": "跨语言",
+      "text": "泣いている女の子",
+      "relevant": {
+        "cry": 2,
+        "cry_en": 2,
+        "cry_ja": 2
+      }
+    },
+    {
+      "category": "跨语言",
+      "text": "ペンギンをぎゅっと抱っこ",
+      "relevant": {
+        "hug": 2,
+        "hug_ja": 2
+      }
+    },
+    {
+      "category": "跨语言",
+      "text": "saluer son supérieur en uniforme",
+      "relevant": {
+        "salute": 2,
+        "salute_en": 2,
+        "salute_ja": 2
+      }
+    },
+    {
+      "category": "OCR噪声",
+      "text": "今天不想上班",
+      "relevant": {
+        "ocr_work": 2,
+        "burnout": 1
+      }
+    },
+    {
+      "category": "OCR噪声",
+      "text": "没钱了",
+      "relevant": {
+        "ocr_poor": 2,
+        "moneyless": 2
+      }
+    },
+    {
+      "category": "OCR噪声",
+      "text": "生日快乐",
+      "relevant": {
+        "ocr_birthday": 2
+      }
+    },
+    {
+      "category": "OCR噪声",
+      "text": "谢谢大佬",
+      "relevant": {
+        "ocr_thanks": 2,
+        "thanks": 1
+      }
+    },
+    {
+      "category": "OCR噪声",
+      "text": "不想去公司打卡",
+      "relevant": {
+        "ocr_work": 2,
+        "burnout": 2
+      }
+    },
+    {
+      "category": "OCR噪声",
+      "text": "祝你又长大一岁",
+      "relevant": {
+        "ocr_birthday": 2
+      }
+    },
+    {
+      "category": "OCR噪声",
+      "text": "这个月又要吃土了",
+      "relevant": {
+        "ocr_poor": 2,
+        "moneyless": 2
+      }
+    },
+    {
+      "category": "OCR噪声",
+      "text": "感谢高手出手相助",
+      "relevant": {
+        "ocr_thanks": 2,
+        "thanks": 1
+      }
+    }
+  ]
+}

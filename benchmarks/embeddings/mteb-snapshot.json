@@ -1,0 +1,1149 @@
+{
+  "date": "2026-10-09",
+  "source": "https://mteb-leaderboard-backend.hf.space/v1/benchmarks/MTEB%28Multilingual%2C%20v2%29/scores",
+  "benchmark": "MTEB(Multilingual, v2)",
+  "tasks": [
+    {
+      "name": "BornholmBitextMining",
+      "type": "BitextMining"
+    },
+    {
+      "name": "BibleNLPBitextMining",
+      "type": "BitextMining"
+    },
+    {
+      "name": "BUCC.v2",
+      "type": "BitextMining"
+    },
+    {
+      "name": "DiaBlaBitextMining",
+      "type": "BitextMining"
+    },
+    {
+      "name": "FloresBitextMining",
+      "type": "BitextMining"
+    },
+    {
+      "name": "IN22GenBitextMining",
+      "type": "BitextMining"
+    },
+    {
+      "name": "IndicGenBenchFloresBitextMining",
+      "type": "BitextMining"
+    },
+    {
+      "name": "NollySentiBitextMining",
+      "type": "BitextMining"
+    },
+    {
+      "name": "NorwegianCourtsBitextMining",
+      "type": "BitextMining"
+    },
+    {
+      "name": "NTREXBitextMining",
+      "type": "BitextMining"
+    },
+    {
+      "name": "NusaTranslationBitextMining",
+      "type": "BitextMining"
+    },
+    {
+      "name": "NusaXBitextMining",
+      "type": "BitextMining"
+    },
+    {
+      "name": "Tatoeba",
+      "type": "BitextMining"
+    },
+    {
+      "name": "BulgarianStoreReviewSentimentClassfication",
+      "type": "Classification"
+    },
+    {
+      "name": "CzechProductReviewSentimentClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "GreekLegalCodeClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "DBpediaClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "FinancialPhrasebankClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "PoemSentimentClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "ToxicConversationsClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "TweetTopicSingleClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "EstonianValenceClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "FilipinoShopeeReviewsClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "GujaratiNewsClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "SentimentAnalysisHindi",
+      "type": "Classification"
+    },
+    {
+      "name": "IndonesianIdClickbaitClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "ItaCaseholdClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "KorSarcasmClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "KurdishSentimentClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "MacedonianTweetSentimentClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "AfriSentiClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "AmazonCounterfactualClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "CataloniaTweetClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "CyrillicTurkicLangClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "IndicLangClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "MasakhaNEWSClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "MassiveIntentClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "MultiHateClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "NordicLangClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "NusaParagraphEmotionClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "NusaX-senti",
+      "type": "Classification"
+    },
+    {
+      "name": "ScalaClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "SwissJudgementClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "NepaliNewsClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "OdiaNewsClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "PunjabiNewsClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "PolEmo2.0-OUT",
+      "type": "Classification"
+    },
+    {
+      "name": "PAC",
+      "type": "Classification"
+    },
+    {
+      "name": "SinhalaNewsClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "CSFDSKMovieReviewSentimentClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "SiswatiNewsClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "SlovakMovieReviewSentimentClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "SwahiliNewsClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "DalajClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "TswanaNewsClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "IsiZuluNewsClassification",
+      "type": "Classification"
+    },
+    {
+      "name": "WikiCitiesClustering",
+      "type": "Clustering"
+    },
+    {
+      "name": "MasakhaNEWSClusteringS2S",
+      "type": "Clustering"
+    },
+    {
+      "name": "RomaniBibleClustering",
+      "type": "Clustering"
+    },
+    {
+      "name": "ArXivHierarchicalClusteringP2P",
+      "type": "Clustering"
+    },
+    {
+      "name": "ArXivHierarchicalClusteringS2S",
+      "type": "Clustering"
+    },
+    {
+      "name": "BigPatentClustering.v2",
+      "type": "Clustering"
+    },
+    {
+      "name": "BiorxivClusteringP2P.v2",
+      "type": "Clustering"
+    },
+    {
+      "name": "MedrxivClusteringP2P.v2",
+      "type": "Clustering"
+    },
+    {
+      "name": "StackExchangeClustering.v2",
+      "type": "Clustering"
+    },
+    {
+      "name": "AlloProfClusteringS2S.v2",
+      "type": "Clustering"
+    },
+    {
+      "name": "HALClusteringS2S.v2",
+      "type": "Clustering"
+    },
+    {
+      "name": "SIB200ClusteringS2S",
+      "type": "Clustering"
+    },
+    {
+      "name": "WikiClusteringP2P.v2",
+      "type": "Clustering"
+    },
+    {
+      "name": "PlscClusteringP2P.v2",
+      "type": "Clustering"
+    },
+    {
+      "name": "SwednClusteringP2P",
+      "type": "Clustering"
+    },
+    {
+      "name": "CLSClusteringP2P.v2",
+      "type": "Clustering"
+    },
+    {
+      "name": "StackOverflowQA",
+      "type": "Retrieval"
+    },
+    {
+      "name": "TwitterHjerneRetrieval",
+      "type": "Retrieval"
+    },
+    {
+      "name": "AILAStatutes",
+      "type": "Retrieval"
+    },
+    {
+      "name": "ArguAna",
+      "type": "Retrieval"
+    },
+    {
+      "name": "HagridRetrieval",
+      "type": "Retrieval"
+    },
+    {
+      "name": "LegalBenchCorporateLobbying",
+      "type": "Retrieval"
+    },
+    {
+      "name": "LEMBPasskeyRetrieval",
+      "type": "Retrieval"
+    },
+    {
+      "name": "SCIDOCS",
+      "type": "Retrieval"
+    },
+    {
+      "name": "SpartQA",
+      "type": "Retrieval"
+    },
+    {
+      "name": "TempReasonL1",
+      "type": "Retrieval"
+    },
+    {
+      "name": "TRECCOVID",
+      "type": "Retrieval"
+    },
+    {
+      "name": "WinoGrande",
+      "type": "Retrieval"
+    },
+    {
+      "name": "BelebeleRetrieval",
+      "type": "Retrieval"
+    },
+    {
+      "name": "MLQARetrieval",
+      "type": "Retrieval"
+    },
+    {
+      "name": "StatcanDialogueDatasetRetrieval",
+      "type": "Retrieval"
+    },
+    {
+      "name": "WikipediaRetrievalMultilingual",
+      "type": "Retrieval"
+    },
+    {
+      "name": "CovidRetrieval",
+      "type": "Retrieval"
+    },
+    {
+      "name": "Core17InstructionRetrieval",
+      "type": "InstructionReranking"
+    },
+    {
+      "name": "News21InstructionRetrieval",
+      "type": "InstructionReranking"
+    },
+    {
+      "name": "Robust04InstructionRetrieval",
+      "type": "InstructionReranking"
+    },
+    {
+      "name": "KorHateSpeechMLClassification",
+      "type": "MultilabelClassification"
+    },
+    {
+      "name": "MalteseNewsClassification",
+      "type": "MultilabelClassification"
+    },
+    {
+      "name": "MultiEURLEXMultilabelClassification",
+      "type": "MultilabelClassification"
+    },
+    {
+      "name": "BrazilianToxicTweetsClassification",
+      "type": "MultilabelClassification"
+    },
+    {
+      "name": "CEDRClassification",
+      "type": "MultilabelClassification"
+    },
+    {
+      "name": "CTKFactsNLI",
+      "type": "PairClassification"
+    },
+    {
+      "name": "SprintDuplicateQuestions",
+      "type": "PairClassification"
+    },
+    {
+      "name": "TwitterURLCorpus",
+      "type": "PairClassification"
+    },
+    {
+      "name": "ArmenianParaphrasePC",
+      "type": "PairClassification"
+    },
+    {
+      "name": "indonli",
+      "type": "PairClassification"
+    },
+    {
+      "name": "OpusparcusPC",
+      "type": "PairClassification"
+    },
+    {
+      "name": "PawsXPairClassification",
+      "type": "PairClassification"
+    },
+    {
+      "name": "RTE3",
+      "type": "PairClassification"
+    },
+    {
+      "name": "XNLI",
+      "type": "PairClassification"
+    },
+    {
+      "name": "PpcPC",
+      "type": "PairClassification"
+    },
+    {
+      "name": "TERRa",
+      "type": "PairClassification"
+    },
+    {
+      "name": "WebLINXCandidatesReranking",
+      "type": "Reranking"
+    },
+    {
+      "name": "AlloprofReranking",
+      "type": "Reranking"
+    },
+    {
+      "name": "VoyageMMarcoReranking",
+      "type": "Reranking"
+    },
+    {
+      "name": "WikipediaRerankingMultilingual",
+      "type": "Reranking"
+    },
+    {
+      "name": "RuBQReranking",
+      "type": "Reranking"
+    },
+    {
+      "name": "T2Reranking",
+      "type": "Reranking"
+    },
+    {
+      "name": "GermanSTSBenchmark",
+      "type": "STS"
+    },
+    {
+      "name": "SICK-R",
+      "type": "STS"
+    },
+    {
+      "name": "STS12",
+      "type": "STS"
+    },
+    {
+      "name": "STS13",
+      "type": "STS"
+    },
+    {
+      "name": "STS14",
+      "type": "STS"
+    },
+    {
+      "name": "STS15",
+      "type": "STS"
+    },
+    {
+      "name": "STSBenchmark",
+      "type": "STS"
+    },
+    {
+      "name": "FaroeseSTS",
+      "type": "STS"
+    },
+    {
+      "name": "FinParaSTS",
+      "type": "STS"
+    },
+    {
+      "name": "JSICK",
+      "type": "STS"
+    },
+    {
+      "name": "IndicCrosslingualSTS",
+      "type": "STS"
+    },
+    {
+      "name": "SemRel24STS",
+      "type": "STS"
+    },
+    {
+      "name": "STS17",
+      "type": "STS"
+    },
+    {
+      "name": "STS22.v2",
+      "type": "STS"
+    },
+    {
+      "name": "STSES",
+      "type": "STS"
+    },
+    {
+      "name": "STSB",
+      "type": "STS"
+    },
+    {
+      "name": "MIRACLRetrievalHardNegatives",
+      "type": "Retrieval"
+    }
+  ],
+  "common_untrained_tasks": [
+    "NusaTranslationBitextMining",
+    "SentimentAnalysisHindi",
+    "News21InstructionRetrieval",
+    "PpcPC",
+    "FilipinoShopeeReviewsClassification",
+    "SCIDOCS",
+    "WikipediaRetrievalMultilingual",
+    "TweetTopicSingleClassification",
+    "RomaniBibleClustering",
+    "BiorxivClusteringP2P.v2",
+    "LEMBPasskeyRetrieval",
+    "MasakhaNEWSClusteringS2S",
+    "STS13",
+    "MassiveIntentClassification",
+    "MedrxivClusteringP2P.v2",
+    "LegalBenchCorporateLobbying",
+    "NollySentiBitextMining",
+    "KurdishSentimentClassification",
+    "SwednClusteringP2P",
+    "TRECCOVID",
+    "SinhalaNewsClassification",
+    "SICK-R",
+    "ArXivHierarchicalClusteringS2S",
+    "T2Reranking",
+    "FinancialPhrasebankClassification",
+    "SIB200ClusteringS2S",
+    "MalteseNewsClassification",
+    "MLQARetrieval",
+    "BrazilianToxicTweetsClassification",
+    "STS15",
+    "MultiHateClassification",
+    "IndonesianIdClickbaitClassification",
+    "OpusparcusPC",
+    "StackExchangeClustering.v2",
+    "AILAStatutes",
+    "KorHateSpeechMLClassification",
+    "BUCC.v2",
+    "FaroeseSTS",
+    "TwitterURLCorpus",
+    "SprintDuplicateQuestions",
+    "IsiZuluNewsClassification",
+    "PolEmo2.0-OUT",
+    "CEDRClassification",
+    "STS17",
+    "ItaCaseholdClassification",
+    "Robust04InstructionRetrieval",
+    "SlovakMovieReviewSentimentClassification",
+    "GujaratiNewsClassification",
+    "indonli",
+    "ArmenianParaphrasePC",
+    "STS22.v2",
+    "FloresBitextMining",
+    "WikiClusteringP2P.v2",
+    "JSICK",
+    "NTREXBitextMining",
+    "MacedonianTweetSentimentClassification",
+    "XNLI",
+    "DiaBlaBitextMining",
+    "ArguAna",
+    "BulgarianStoreReviewSentimentClassfication",
+    "BelebeleRetrieval",
+    "CovidRetrieval",
+    "WikipediaRerankingMultilingual",
+    "VoyageMMarcoReranking",
+    "DalajClassification",
+    "NusaX-senti",
+    "Core17InstructionRetrieval",
+    "PunjabiNewsClassification",
+    "IN22GenBitextMining",
+    "WebLINXCandidatesReranking",
+    "EstonianValenceClassification",
+    "RTE3",
+    "CLSClusteringP2P.v2",
+    "IndicGenBenchFloresBitextMining",
+    "HagridRetrieval",
+    "PlscClusteringP2P.v2",
+    "SwahiliNewsClassification",
+    "TwitterHjerneRetrieval",
+    "StackOverflowQA",
+    "BibleNLPBitextMining",
+    "BigPatentClustering.v2",
+    "NorwegianCourtsBitextMining",
+    "STS12",
+    "STSES",
+    "SiswatiNewsClassification",
+    "CTKFactsNLI",
+    "IndicCrosslingualSTS",
+    "MultiEURLEXMultilabelClassification",
+    "HALClusteringS2S.v2",
+    "AlloprofReranking",
+    "MasakhaNEWSClassification",
+    "ArXivHierarchicalClusteringP2P",
+    "AlloProfClusteringS2S.v2",
+    "Tatoeba",
+    "STSBenchmark",
+    "KorSarcasmClassification",
+    "WikiCitiesClustering",
+    "AfriSentiClassification",
+    "STS14",
+    "NusaXBitextMining",
+    "TswanaNewsClassification",
+    "RuBQReranking",
+    "NepaliNewsClassification"
+  ],
+  "rows": [
+    {
+      "model": "microsoft/harrier-oss-v1-270m",
+      "mean_task": 0.66546969531282,
+      "zero_shot_percent": 78,
+      "trained_on_tasks": [
+        "AmazonCounterfactualClassification",
+        "BornholmBitextMining",
+        "CSFDSKMovieReviewSentimentClassification",
+        "CataloniaTweetClassification",
+        "CyrillicTurkicLangClassification",
+        "CzechProductReviewSentimentClassification",
+        "DBpediaClassification",
+        "FinParaSTS",
+        "GermanSTSBenchmark",
+        "GreekLegalCodeClassification",
+        "IndicLangClassification",
+        "MIRACLRetrievalHardNegatives",
+        "NordicLangClassification",
+        "NusaParagraphEmotionClassification",
+        "OdiaNewsClassification",
+        "PAC",
+        "PawsXPairClassification",
+        "PoemSentimentClassification",
+        "STSB",
+        "ScalaClassification",
+        "SemRel24STS",
+        "SpartQA",
+        "StatcanDialogueDatasetRetrieval",
+        "SwissJudgementClassification",
+        "TERRa",
+        "TempReasonL1",
+        "ToxicConversationsClassification",
+        "WinoGrande"
+      ],
+      "task_type_scores": {
+        "Clustering": 0.5250786718013506,
+        "PairClassification": 0.8011885800865801,
+        "STS": 0.7535376526199495,
+        "Reranking": 0.618955326388889,
+        "Retrieval": 0.6637835960040044,
+        "Classification": 0.7083569239480993,
+        "BitextMining": 0.8153816831324021,
+        "InstructionReranking": -0.004679666666666668,
+        "MultilabelClassification": 0.23969744347826089
+      },
+      "task_scores": {
+        "NusaTranslationBitextMining": 0.8297173636363637,
+        "SentimentAnalysisHindi": 0.634514,
+        "News21InstructionRetrieval": 0.02147,
+        "PpcPC": 0.901907,
+        "FilipinoShopeeReviewsClassification": 0.42168,
+        "SCIDOCS": 0.21469,
+        "WikipediaRetrievalMultilingual": 0.84341625,
+        "TweetTopicSingleClassification": 0.785706,
+        "RomaniBibleClustering": 0.3893,
+        "BiorxivClusteringP2P.v2": 0.477091,
+        "LEMBPasskeyRetrieval": 0.8275,
+        "MasakhaNEWSClusteringS2S": 0.542723375,
+        "STS13": 0.850239,
+        "MassiveIntentClassification": 0.6107007843137255,
+        "MedrxivClusteringP2P.v2": 0.408406,
+        "LegalBenchCorporateLobbying": 0.94238,
+        "NollySentiBitextMining": 0.7803635,
+        "TempReasonL1": 0.18275,
+        "KurdishSentimentClassification": 0.865727,
+        "SwednClusteringP2P": 0.5563715,
+        "TRECCOVID": 0.82102,
+        "SinhalaNewsClassification": 0.758643,
+        "SICK-R": 0.820597,
+        "ArXivHierarchicalClusteringS2S": 0.594377,
+        "T2Reranking": 0.66829,
+        "FinancialPhrasebankClassification": 0.803313,
+        "SIB200ClusteringS2S": 0.43797873096446704,
+        "MalteseNewsClassification": 0.356117,
+        "MLQARetrieval": 0.6758082653061224,
+        "BrazilianToxicTweetsClassification": 0.231396,
+        "STS15": 0.893462,
+        "PoemSentimentClassification": 0.6683475000000001,
+        "MultiHateClassification": 0.5791545454545455,
+        "IndonesianIdClickbaitClassification": 0.63195,
+        "OpusparcusPC": 0.9387706666666666,
+        "NusaParagraphEmotionClassification": 0.6134754,
+        "CSFDSKMovieReviewSentimentClassification": 0.547559,
+        "StackExchangeClustering.v2": 0.718229,
+        "AILAStatutes": 0.35688,
+        "KorHateSpeechMLClassification": 0.091311,
+        "ScalaClassification": 0.6221315000000001,
+        "WinoGrande": 0.78175,
+        "BUCC.v2": 0.9873675,
+        "GermanSTSBenchmark": 0.846686,
+        "TERRa": 0.592768,
+        "FaroeseSTS": 0.760281,
+        "TwitterURLCorpus": 0.861616,
+        "SprintDuplicateQuestions": 0.964584,
+        "IsiZuluNewsClassification": 0.361037,
+        "PolEmo2.0-OUT": 0.640486,
+        "ToxicConversationsClassification": 0.888428,
+        "CEDRClassification": 0.473858,
+        "STS17": 0.8505116363636364,
+        "IndicLangClassification": 0.9818,
+        "ItaCaseholdClassification": 0.766063,
+        "CataloniaTweetClassification": 0.6827485,
+        "Robust04InstructionRetrieval": -0.028868,
+        "SlovakMovieReviewSentimentClassification": 0.89873,
+        "AmazonCounterfactualClassification": 0.923462875,
+        "GujaratiNewsClassification": 0.847572,
+        "STSB": 0.8221915,
+        "indonli": 0.567619,
+        "ArmenianParaphrasePC": 0.942186,
+        "STS22.v2": 0.7042507222222222,
+        "FloresBitextMining": 0.8537442749444606,
+        "WikiClusteringP2P.v2": 0.2938191428571429,
+        "BornholmBitextMining": 0.670144,
+        "JSICK": 0.842092,
+        "NTREXBitextMining": 0.9247728935281837,
+        "SemRel24STS": 0.66244275,
+        "MacedonianTweetSentimentClassification": 0.622125,
+        "XNLI": 0.7991549285714286,
+        "DiaBlaBitextMining": 0.852818,
+        "ArguAna": 0.63632,
+        "BulgarianStoreReviewSentimentClassfication": 0.754945,
+        "BelebeleRetrieval": 0.7395702127659575,
+        "CovidRetrieval": 0.81599,
+        "WikipediaRerankingMultilingual": 0.847048125,
+        "VoyageMMarcoReranking": 0.62046,
+        "DalajClassification": 0.496171,
+        "NusaX-senti": 0.6417708333333333,
+        "Core17InstructionRetrieval": -0.006641,
+        "PunjabiNewsClassification": 0.771975,
+        "IN22GenBitextMining": 0.8298904664031621,
+        "WebLINXCandidatesReranking": 0.11953383333333334,
+        "EstonianValenceClassification": 0.571883,
+        "RTE3": 0.878871,
+        "CLSClusteringP2P.v2": 0.532487,
+        "PAC": 0.707674,
+        "IndicGenBenchFloresBitextMining": 0.9637177586206896,
+        "HagridRetrieval": 0.98896,
+        "PlscClusteringP2P.v2": 0.732811,
+        "SwahiliNewsClassification": 0.630859,
+        "TwitterHjerneRetrieval": 0.60126,
+        "StackOverflowQA": 0.89605,
+        "BibleNLPBitextMining": 0.3691456739130435,
+        "BigPatentClustering.v2": 0.373976,
+        "MIRACLRetrievalHardNegatives": 0.62177,
+        "CzechProductReviewSentimentClassification": 0.669043,
+        "PawsXPairClassification": 0.5523947857142857,
+        "OdiaNewsClassification": 0.944966,
+        "NorwegianCourtsBitextMining": 0.932018,
+        "STS12": 0.79363,
+        "SpartQA": 0.60592,
+        "STSES": 0.758846,
+        "SiswatiNewsClassification": 0.565,
+        "CTKFactsNLI": 0.813203,
+        "DBpediaClassification": 0.988965,
+        "NordicLangClassification": 0.914,
+        "IndicCrosslingualSTS": 0.5113208333333333,
+        "MultiEURLEXMultilabelClassification": 0.045805217391304345,
+        "HALClusteringS2S.v2": 0.291117,
+        "AlloprofReranking": 0.73985,
+        "MasakhaNEWSClassification": 0.855459375,
+        "ArXivHierarchicalClusteringP2P": 0.61477,
+        "AlloProfClusteringS2S.v2": 0.528639,
+        "Tatoeba": 0.7836472678571429,
+        "STSBenchmark": 0.873411,
+        "KorSarcasmClassification": 0.558057,
+        "WikiCitiesClustering": 0.909163,
+        "AfriSentiClassification": 0.45438175000000003,
+        "CyrillicTurkicLangClassification": 0.992285,
+        "STS14": 0.822524,
+        "NusaXBitextMining": 0.8226151818181818,
+        "StatcanDialogueDatasetRetrieval": 0.39607000000000003,
+        "TswanaNewsClassification": 0.512731,
+        "GreekLegalCodeClassification": 0.582031,
+        "RuBQReranking": 0.71855,
+        "SwissJudgementClassification": 0.7309566666666667,
+        "NepaliNewsClassification": 0.96084,
+        "FinParaSTS": 0.244117
+      },
+      "common_untrained_mean": 0.6576665301805673
+    },
+    {
+      "model": "microsoft/harrier-oss-v1-0.6b",
+      "mean_task": 0.6901251361787604,
+      "zero_shot_percent": 78,
+      "trained_on_tasks": [
+        "AmazonCounterfactualClassification",
+        "BornholmBitextMining",
+        "CSFDSKMovieReviewSentimentClassification",
+        "CataloniaTweetClassification",
+        "CyrillicTurkicLangClassification",
+        "CzechProductReviewSentimentClassification",
+        "DBpediaClassification",
+        "FinParaSTS",
+        "GermanSTSBenchmark",
+        "GreekLegalCodeClassification",
+        "IndicLangClassification",
+        "MIRACLRetrievalHardNegatives",
+        "NordicLangClassification",
+        "NusaParagraphEmotionClassification",
+        "OdiaNewsClassification",
+        "PAC",
+        "PawsXPairClassification",
+        "PoemSentimentClassification",
+        "STSB",
+        "ScalaClassification",
+        "SemRel24STS",
+        "SpartQA",
+        "StatcanDialogueDatasetRetrieval",
+        "SwissJudgementClassification",
+        "TERRa",
+        "TempReasonL1",
+        "ToxicConversationsClassification",
+        "WinoGrande"
+      ],
+      "task_type_scores": {
+        "Clustering": 0.5400164976403871,
+        "PairClassification": 0.8206734534632036,
+        "STS": 0.7708862173295454,
+        "Reranking": 0.6315629930555555,
+        "Retrieval": 0.7075393197714468,
+        "Classification": 0.7387618735185301,
+        "BitextMining": 0.8284715221893226,
+        "InstructionReranking": 0.008062,
+        "MultilabelClassification": 0.2636758695652174
+      },
+      "task_scores": {
+        "NusaTranslationBitextMining": 0.8500775454545455,
+        "SentimentAnalysisHindi": 0.681506,
+        "News21InstructionRetrieval": 0.008,
+        "PpcPC": 0.927231,
+        "FilipinoShopeeReviewsClassification": 0.4326175,
+        "SCIDOCS": 0.23365,
+        "WikipediaRetrievalMultilingual": 0.85075625,
+        "TweetTopicSingleClassification": 0.786119,
+        "RomaniBibleClustering": 0.412198,
+        "BiorxivClusteringP2P.v2": 0.504051,
+        "LEMBPasskeyRetrieval": 0.7675,
+        "MasakhaNEWSClusteringS2S": 0.5176043124999999,
+        "STS13": 0.879525,
+        "MassiveIntentClassification": 0.6667087647058824,
+        "MedrxivClusteringP2P.v2": 0.43613,
+        "LegalBenchCorporateLobbying": 0.94247,
+        "NollySentiBitextMining": 0.819632,
+        "TempReasonL1": 0.3191,
+        "KurdishSentimentClassification": 0.879165,
+        "SwednClusteringP2P": 0.523969,
+        "TRECCOVID": 0.86952,
+        "SinhalaNewsClassification": 0.736426,
+        "SICK-R": 0.838217,
+        "ArXivHierarchicalClusteringS2S": 0.629247,
+        "T2Reranking": 0.6696,
+        "FinancialPhrasebankClassification": 0.951899,
+        "SIB200ClusteringS2S": 0.4621556497461929,
+        "MalteseNewsClassification": 0.381976,
+        "MLQARetrieval": 0.729975306122449,
+        "BrazilianToxicTweetsClassification": 0.276953,
+        "STS15": 0.901548,
+        "PoemSentimentClassification": 0.8320835,
+        "MultiHateClassification": 0.649190909090909,
+        "IndonesianIdClickbaitClassification": 0.664947,
+        "OpusparcusPC": 0.9458826666666668,
+        "NusaParagraphEmotionClassification": 0.6768332,
+        "CSFDSKMovieReviewSentimentClassification": 0.601709,
+        "StackExchangeClustering.v2": 0.774782,
+        "AILAStatutes": 0.37692,
+        "KorHateSpeechMLClassification": 0.125724,
+        "ScalaClassification": 0.7287475,
+        "WinoGrande": 0.83684,
+        "BUCC.v2": 0.98795225,
+        "GermanSTSBenchmark": 0.856786,
+        "TERRa": 0.643316,
+        "FaroeseSTS": 0.788753,
+        "TwitterURLCorpus": 0.867927,
+        "SprintDuplicateQuestions": 0.969434,
+        "IsiZuluNewsClassification": 0.368085,
+        "PolEmo2.0-OUT": 0.704656,
+        "ToxicConversationsClassification": 0.910205,
+        "CEDRClassification": 0.479702,
+        "STS17": 0.8653647272727273,
+        "IndicLangClassification": 0.984466,
+        "ItaCaseholdClassification": 0.787783,
+        "CataloniaTweetClassification": 0.70048775,
+        "Robust04InstructionRetrieval": -0.01271,
+        "SlovakMovieReviewSentimentClassification": 0.922363,
+        "AmazonCounterfactualClassification": 0.925338625,
+        "GujaratiNewsClassification": 0.871472,
+        "STSB": 0.8358835,
+        "indonli": 0.585202,
+        "ArmenianParaphrasePC": 0.945325,
+        "STS22.v2": 0.7213448333333333,
+        "FloresBitextMining": 0.86347741753598,
+        "WikiClusteringP2P.v2": 0.313977,
+        "BornholmBitextMining": 0.6928,
+        "JSICK": 0.858272,
+        "NTREXBitextMining": 0.9321788731732776,
+        "SemRel24STS": 0.6776235833333333,
+        "MacedonianTweetSentimentClassification": 0.665584,
+        "XNLI": 0.8335712142857143,
+        "DiaBlaBitextMining": 0.858162,
+        "ArguAna": 0.64987,
+        "BulgarianStoreReviewSentimentClassfication": 0.78956,
+        "BelebeleRetrieval": 0.774189255319149,
+        "CovidRetrieval": 0.83566,
+        "WikipediaRerankingMultilingual": 0.840655625,
+        "VoyageMMarcoReranking": 0.63408,
+        "DalajClassification": 0.503153,
+        "NusaX-senti": 0.6651666666666667,
+        "Core17InstructionRetrieval": 0.028896,
+        "PunjabiNewsClassification": 0.802548,
+        "IN22GenBitextMining": 0.8236755553359684,
+        "WebLINXCandidatesReranking": 0.1267923333333333,
+        "EstonianValenceClassification": 0.584963,
+        "RTE3": 0.8898757500000001,
+        "CLSClusteringP2P.v2": 0.599507,
+        "PAC": 0.752853,
+        "IndicGenBenchFloresBitextMining": 0.9561899051724139,
+        "HagridRetrieval": 0.98836,
+        "PlscClusteringP2P.v2": 0.730573,
+        "SwahiliNewsClassification": 0.593799,
+        "TwitterHjerneRetrieval": 0.6434,
+        "StackOverflowQA": 0.93694,
+        "BibleNLPBitextMining": 0.4064919365942029,
+        "BigPatentClustering.v2": 0.37607,
+        "MIRACLRetrievalHardNegatives": 0.6635294444444445,
+        "CzechProductReviewSentimentClassification": 0.704883,
+        "PawsXPairClassification": 0.5957813571428572,
+        "OdiaNewsClassification": 0.954217,
+        "NorwegianCourtsBitextMining": 0.930556,
+        "STS12": 0.809755,
+        "SpartQA": 0.84689,
+        "STSES": 0.790986,
+        "SiswatiNewsClassification": 0.56,
+        "CTKFactsNLI": 0.8238620000000001,
+        "DBpediaClassification": 0.989404,
+        "NordicLangClassification": 0.935667,
+        "IndicCrosslingualSTS": 0.5328328333333333,
+        "MultiEURLEXMultilabelClassification": 0.05402434782608695,
+        "HALClusteringS2S.v2": 0.29833,
+        "AlloprofReranking": 0.77904,
+        "MasakhaNEWSClassification": 0.8486668125,
+        "ArXivHierarchicalClusteringP2P": 0.633023,
+        "AlloProfClusteringS2S.v2": 0.498414,
+        "Tatoeba": 0.7951792142857144,
+        "STSBenchmark": 0.893199,
+        "KorSarcasmClassification": 0.680566,
+        "WikiCitiesClustering": 0.930233,
+        "AfriSentiClassification": 0.453382,
+        "CyrillicTurkicLangClassification": 0.9875,
+        "STS14": 0.845685,
+        "NusaXBitextMining": 0.8537570909090909,
+        "StatcanDialogueDatasetRetrieval": 0.4701375,
+        "TswanaNewsClassification": 0.515606,
+        "GreekLegalCodeClassification": 0.612085,
+        "RuBQReranking": 0.73921,
+        "SwissJudgementClassification": 0.7463403333333334,
+        "NepaliNewsClassification": 0.958008,
+        "FinParaSTS": 0.238404
+      },
+      "common_untrained_mean": 0.6765677820015888
+    },
+    {
+      "model": "Qwen/Qwen3-Embedding-0.6B",
+      "mean_task": 0.6433551926768859,
+      "zero_shot_percent": 99,
+      "trained_on_tasks": ["MIRACLRetrievalHardNegatives"],
+      "task_type_scores": {
+        "Clustering": 0.5232641443018039,
+        "PairClassification": 0.80831283982684,
+        "STS": 0.7616835441919192,
+        "Reranking": 0.6140931770833333,
+        "Retrieval": 0.6464702360447725,
+        "Classification": 0.6682845920770635,
+        "BitextMining": 0.7222786386933959,
+        "InstructionReranking": 0.05094133333333334,
+        "MultilabelClassification": 0.24584378260869566
+      },
+      "task_scores": {
+        "NusaTranslationBitextMining": 0.8539324545454545,
+        "SentimentAnalysisHindi": 0.742522,
+        "News21InstructionRetrieval": 0.036048,
+        "PpcPC": 0.905005,
+        "FilipinoShopeeReviewsClassification": 0.408447,
+        "SCIDOCS": 0.24407,
+        "WikipediaRetrievalMultilingual": 0.87133875,
+        "TweetTopicSingleClassification": 0.807501,
+        "RomaniBibleClustering": 0.402853,
+        "BiorxivClusteringP2P.v2": 0.472655,
+        "LEMBPasskeyRetrieval": 0.8475,
+        "MasakhaNEWSClusteringS2S": 0.532390125,
+        "STS13": 0.917553,
+        "MassiveIntentClassification": 0.6143749509803922,
+        "MedrxivClusteringP2P.v2": 0.421841,
+        "LegalBenchCorporateLobbying": 0.94517,
+        "NollySentiBitextMining": 0.613331,
+        "TempReasonL1": 0.01022,
+        "KurdishSentimentClassification": 0.800654,
+        "SwednClusteringP2P": 0.5335785,
+        "TRECCOVID": 0.90518,
+        "SinhalaNewsClassification": 0.595898,
+        "SICK-R": 0.848283,
+        "ArXivHierarchicalClusteringS2S": 0.638185,
+        "T2Reranking": 0.671523,
+        "FinancialPhrasebankClassification": 0.905786,
+        "SIB200ClusteringS2S": 0.34126696954314717,
+        "MalteseNewsClassification": 0.36108,
+        "MLQARetrieval": 0.7278776530612244,
+        "BrazilianToxicTweetsClassification": 0.226074,
+        "STS15": 0.914472,
+        "PoemSentimentClassification": 0.733031,
+        "MultiHateClassification": 0.6429999999999999,
+        "IndonesianIdClickbaitClassification": 0.647674,
+        "OpusparcusPC": 0.9294449166666666,
+        "NusaParagraphEmotionClassification": 0.4775818,
+        "CSFDSKMovieReviewSentimentClassification": 0.44082,
+        "StackExchangeClustering.v2": 0.711618,
+        "AILAStatutes": 0.79018,
+        "KorHateSpeechMLClassification": 0.09676,
+        "ScalaClassification": 0.50512725,
+        "WinoGrande": 0.50792,
+        "BUCC.v2": 0.984417,
+        "GermanSTSBenchmark": 0.8490105,
+        "TERRa": 0.606803,
+        "FaroeseSTS": 0.743312,
+        "TwitterURLCorpus": 0.867482,
+        "SprintDuplicateQuestions": 0.941094,
+        "IsiZuluNewsClassification": 0.255585,
+        "PolEmo2.0-OUT": 0.715182,
+        "ToxicConversationsClassification": 0.821289,
+        "CEDRClassification": 0.498831,
+        "STS17": 0.8550388181818181,
+        "IndicLangClassification": 0.930919,
+        "ItaCaseholdClassification": 0.616742,
+        "CataloniaTweetClassification": 0.49137725,
+        "Robust04InstructionRetrieval": 0.027448,
+        "SlovakMovieReviewSentimentClassification": 0.863428,
+        "AmazonCounterfactualClassification": 0.90422325,
+        "GujaratiNewsClassification": 0.858422,
+        "STSB": 0.846196,
+        "indonli": 0.589872,
+        "ArmenianParaphrasePC": 0.931424,
+        "STS22.v2": 0.7183335555555556,
+        "FloresBitextMining": 0.6275455782140443,
+        "WikiClusteringP2P.v2": 0.29658971428571423,
+        "BornholmBitextMining": 0.542167,
+        "JSICK": 0.866246,
+        "NTREXBitextMining": 0.7945833089770356,
+        "SemRel24STS": 0.5937311666666667,
+        "MacedonianTweetSentimentClassification": 0.610272,
+        "XNLI": 0.8171572500000001,
+        "DiaBlaBitextMining": 0.808666,
+        "ArguAna": 0.70965,
+        "BulgarianStoreReviewSentimentClassfication": 0.734066,
+        "BelebeleRetrieval": 0.6873828457446808,
+        "CovidRetrieval": 0.84761,
+        "WikipediaRerankingMultilingual": 0.8598550625,
+        "VoyageMMarcoReranking": 0.576603,
+        "DalajClassification": 0.49955,
+        "NusaX-senti": 0.7131041666666667,
+        "Core17InstructionRetrieval": 0.089328,
+        "PunjabiNewsClassification": 0.835032,
+        "IN22GenBitextMining": 0.7577553023715415,
+        "WebLINXCandidatesReranking": 0.116022,
+        "EstonianValenceClassification": 0.411125,
+        "RTE3": 0.8895385,
+        "CLSClusteringP2P.v2": 0.620127,
+        "PAC": 0.695251,
+        "IndicGenBenchFloresBitextMining": 0.9042270689655172,
+        "HagridRetrieval": 0.98758,
+        "PlscClusteringP2P.v2": 0.742182,
+        "SwahiliNewsClassification": 0.583545,
+        "TwitterHjerneRetrieval": 0.6004,
+        "StackOverflowQA": 0.89994,
+        "BibleNLPBitextMining": 0.21171626932367152,
+        "BigPatentClustering.v2": 0.324887,
+        "MIRACLRetrievalHardNegatives": 0.6122650000000001,
+        "CzechProductReviewSentimentClassification": 0.637549,
+        "PawsXPairClassification": 0.6219185714285714,
+        "OdiaNewsClassification": 0.841874,
+        "NorwegianCourtsBitextMining": 0.926901,
+        "STS12": 0.829953,
+        "SpartQA": 0.10585,
+        "STSES": 0.769487,
+        "SiswatiNewsClassification": 0.58,
+        "CTKFactsNLI": 0.791702,
+        "DBpediaClassification": 0.988428,
+        "NordicLangClassification": 0.843233,
+        "IndicCrosslingualSTS": 0.3897911666666667,
+        "MultiEURLEXMultilabelClassification": 0.04647391304347826,
+        "HALClusteringS2S.v2": 0.289713,
+        "AlloprofReranking": 0.803828,
+        "MasakhaNEWSClassification": 0.8049881249999999,
+        "ArXivHierarchicalClusteringP2P": 0.637187,
+        "AlloProfClusteringS2S.v2": 0.539575,
+        "Tatoeba": 0.5805298660714285,
+        "STSBenchmark": 0.911297,
+        "KorSarcasmClassification": 0.558984,
+        "WikiCitiesClustering": 0.867578,
+        "AfriSentiClassification": 0.46047600000000005,
+        "CyrillicTurkicLangClassification": 0.902002,
+        "STS14": 0.871015,
+        "NusaXBitextMining": 0.7838504545454547,
+        "StatcanDialogueDatasetRetrieval": 0.33633,
+        "TswanaNewsClassification": 0.348871,
+        "GreekLegalCodeClassification": 0.39694799999999997,
+        "RuBQReranking": 0.656728,
+        "SwissJudgementClassification": 0.5555926666666667,
+        "NepaliNewsClassification": 0.955762,
+        "FinParaSTS": 0.2632175
+      },
+      "common_untrained_mean": 0.6526083037467009
+    }
+  ]
+}
