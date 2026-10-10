@@ -8,6 +8,7 @@ import UIcon from '@nuxt/ui/components/Icon.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
 import UModal from '@nuxt/ui/components/Modal.vue'
 import UProgress from '@nuxt/ui/components/Progress.vue'
+import USelect from '@nuxt/ui/components/Select.vue'
 import USwitch from '@nuxt/ui/components/Switch.vue'
 import UTabs from '@nuxt/ui/components/Tabs.vue'
 import { api } from '../api'
@@ -40,7 +41,7 @@ const visionDirty = computed(
 const requiredMissing = computed(
   () =>
     props.model?.missing.filter((name) =>
-      name.startsWith(settingsTab.value === 'ocr' ? 'ocr-' : 'qwen3-'),
+      settingsTab.value === 'ocr' ? name.startsWith('ocr-') : !name.startsWith('ocr-'),
     ) ?? [],
 )
 const settingsTabs = [
@@ -48,6 +49,11 @@ const settingsTabs = [
   { label: 'OCR', value: 'ocr' },
   { label: 'Embedding', value: 'models' },
   { label: '图片理解 API', value: 'vision' },
+]
+const embeddingModels = [
+  { label: 'Qwen3-Embedding-0.6B', value: 'qwen3-0.6b' },
+  { label: 'Qwen3-Embedding-4B', value: 'qwen3-4b' },
+  { label: 'Qwen3-Embedding-8B', value: 'qwen3-8b' },
 ]
 
 watch(open, (opened) => {
@@ -67,6 +73,7 @@ async function saveSettings() {
     emit('refresh')
     notify('设置已保存')
   } catch (error) {
+    draft.value = { ...props.settings }
     notify(errorMessage(error), true)
   } finally {
     settingsSaving.value = false
@@ -217,16 +224,37 @@ async function testVision() {
             {{ model?.ocrReady ? '已安装' : '待安装' }}
           </UBadge>
         </div>
-        <div v-else class="model-item">
-          <UIcon name="i-lucide-text-search" class="size-5 shrink-0 text-primary" />
-          <div class="flex-1">
-            <h3 class="text-sm font-medium">描述语义检索</h3>
-            <p class="mt-1 text-xs text-muted">Qwen3-Embedding-0.6B · 多语言 · 本地推理</p>
-          </div>
-          <UBadge color="neutral" variant="subtle" size="xs">
-            {{ model?.ready ? '已安装' : '待安装' }}
-          </UBadge>
-        </div>
+        <template v-else>
+          <UFormField
+            label="向量模型"
+            description="切换会重建文字索引，保留原图、OCR 和描述。请先暂停本地任务。"
+          >
+            <div class="flex items-center gap-3">
+              <USelect
+                v-model="draft.embeddingModel"
+                :items="embeddingModels"
+                aria-label="向量模型"
+                class="flex-1"
+                :disabled="
+                  settingsSaving || model?.job.running || model?.ocr.running || model?.index.running
+                "
+                @update:model-value="saveSettings()"
+              />
+              <UBadge color="neutral" variant="subtle" size="xs">
+                {{ model?.ready ? '已安装' : '待安装' }}
+              </UBadge>
+            </div>
+          </UFormField>
+          <p class="text-xs text-muted">
+            {{
+              draft.embeddingModel === 'qwen3-4b'
+                ? '2560 维 · 建议 INT8 · CPU 推理'
+                : draft.embeddingModel === 'qwen3-8b'
+                  ? '4096 维 · 建议 INT8 · 内存占用和推理时间高于 4B'
+                  : '1024 维 · CPU 推理'
+            }}
+          </p>
+        </template>
         <div v-if="model?.job.running" class="space-y-3">
           <div class="flex justify-between gap-3 text-xs text-muted">
             <span>{{ model.job.message }}</span>
@@ -264,7 +292,14 @@ async function testVision() {
         >
           {{ importingModels ? '选择模型文件…' : '导入本地模型' }}
         </UButton>
-        <p class="text-xs text-muted">可多选模型文件。导入与推理均不联网，原文件保留。</p>
+        <p class="text-xs text-muted">
+          {{
+            settingsTab === 'ocr'
+              ? '可多选 OCR 文件。'
+              : '选择 memechan-model.json，关联权重与分词器会一并导入。'
+          }}
+          导入与推理均不联网，原文件保留。
+        </p>
         <p v-if="requiredMissing.length" class="text-xs break-words text-muted">
           还需导入：{{ requiredMissing.join('、') }}
         </p>
@@ -273,9 +308,7 @@ async function testVision() {
           <code>{{ model?.directory || '桌面应用数据目录 / models' }}</code>
           <p>
             支持 README 列出的{{
-              settingsTab === 'ocr'
-                ? ' PP-OCRv5 mobile 模型'
-                : ' Qwen3-Embedding-0.6B INT8 与配套 tokenizer'
+              settingsTab === 'ocr' ? ' PP-OCRv5 mobile 模型' : '所选 Qwen3-Embedding 的模型包'
             }}，无需重命名。
           </p>
         </details>

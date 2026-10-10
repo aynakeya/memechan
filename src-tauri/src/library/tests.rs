@@ -355,7 +355,42 @@ fn model_changes_requeue_vectors_without_repeating_ocr() -> Result<()> {
         .is_empty());
     library.put_embedding(&pending.id, &text, &[0.0, 1.0])?;
     drop(library);
-    assert_eq!(Library::open(&root)?.task_counts(TaskKind::Index)?.0, 0);
+    let mut library = Library::open(&root)?;
+    assert_eq!(library.task_counts(TaskKind::Index)?.0, 0);
+    for model in [
+        EmbeddingModel::Qwen4B,
+        EmbeddingModel::Qwen8B,
+        EmbeddingModel::Qwen06B,
+    ] {
+        library.save_settings(Settings {
+            embedding_model: model,
+            ..Default::default()
+        })?;
+        assert_eq!(library.task_counts(TaskKind::Index)?, (1, 0, 0, 1));
+        assert!(library
+            .search("salute", "semantic", None, Some(&[0.0, 1.0]))?
+            .is_empty());
+        let asset = library.asset(&pending.id)?;
+        assert_eq!(asset.ocr_state, "ready");
+        assert_eq!(asset.description, "举手敬礼");
+        assert!(asset.favorite);
+        library.put_embedding(&asset.id, &text, &[0.0, 1.0])?;
+        drop(library);
+        library = Library::open(&root)?;
+        assert_eq!(library.settings()?.embedding_model, model);
+        assert_eq!(
+            library
+                .search("salute", "semantic", None, Some(&[0.0, 1.0]))?
+                .len(),
+            1
+        );
+    }
+    library.clear_text(TaskKind::Index, None)?;
+    library.save_settings(Settings {
+        embedding_model: EmbeddingModel::Qwen4B,
+        ..Default::default()
+    })?;
+    assert_eq!(library.task_counts(TaskKind::Index)?, (0, 0, 0, 1));
     Ok(())
 }
 

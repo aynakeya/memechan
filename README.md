@@ -12,9 +12,9 @@
 - 静图写入图片和文件剪贴板格式。动图写入原始文件与对应格式，不以静态首帧代替动画。
 - GIF 缩放逐帧处理；动态 WebP / APNG 缩放后转换成 GIF。原文件始终保留。
 - 可开关的本地 PP-OCRv5 mobile 中文、英文和日文识别；动图在前 180 帧中最多抽样 5 帧并合并识别文字。
-- Qwen3-Embedding-0.6B INT8 多语言文本向量检索：文件名、自定义描述、OCR 文字和 API 图片描述作为检索内容。使用查询指令、末个有效 token 的 1024 维向量、L2 归一化和余弦相似度；智能搜索通过倒数排名融合关键词与向量结果。
+- Qwen3-Embedding 0.6B / 4B / 8B 多语言文本向量检索：文件名、自定义描述、OCR 文字和 API 图片描述作为检索内容。使用查询指令、末个有效 token 的 1024 / 2560 / 4096 维向量、L2 归一化和余弦相似度；智能搜索通过倒数排名融合关键词与向量结果。
 - 可配置 OpenAI 兼容的图片理解 API，支持单张生成、批量队列、暂停和可选的导入后自动生成。描述独立保存，不覆盖手写内容。
-- 模型仅从本地文件导入；固定版本、模型及 tokenizer 的 SHA-256 校验；本地保存索引，可暂停任务、重试失败项目。
+- 模型仅从本地文件导入；预置 OCR / 0.6B 使用固定 SHA-256，自导出模型按文件清单校验；本地保存索引，可暂停任务、重试失败项目。
 - 任务管理集中显示 OCR、图片理解和文字索引的进度，分别暂停、继续及重试失败项。OCR 文字和 API 图片描述可逐张或全库清除，保留手写描述与原图。
 
 未配置图片理解 API 时，没有文字且没有自定义描述的图片只能依赖文件名检索。云同步和直接用图片向量检索暂未实现。
@@ -26,15 +26,18 @@
 Ubuntu / Debian 先安装开发包：
 
 ```bash
-sudo apt install build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libxdo-dev patchelf
+sudo apt install build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libxdo-dev patchelf
 ```
 
 然后：
 
 ```bash
+git submodule update --init --recursive
 pnpm install
 pnpm tauri dev
 ```
+
+`vendor/paddle-ocr-rs` 是指向 [OCR fork](https://github.com/aynakeya/paddle-ocr-rs) 的 Git submodule，Cargo 通过本地路径引用其 `rapid-ocr-rs` crate。主仓库固定子模块提交，不自动跟随分支。修改 OCR 库时先在子模块中提交并推送，再在主仓库提交子模块指针；上游合并适配后，可用 `git submodule set-url vendor/paddle-ocr-rs <上游地址>` 切换来源，并在子模块中检出已合并的提交。
 
 `pnpm dev` 只打开浏览器界面预览。浏览器中明确禁用本地文件、剪贴板和模型功能，真实功能需要 Tauri 桌面窗口。第一次编译需下载 Rust 依赖和 ONNX Runtime。
 
@@ -52,7 +55,7 @@ pnpm tauri build
 
 把图片拖入窗口即可添加；打开分组后导入，会加入该分组。单击查看描述、OCR 和所属分组，双击复制，空格预览，Ctrl / Cmd K 搜索。描述可以显式保存，也会在切换所选图片时保存。
 
-在「偏好设置 → OCR / Embedding」点击「导入本地模型」，可多选下表中的 ONNX 和 tokenizer 文件，自动识别内容并复制到资料库，无需重命名，不移动原文件。支持分批导入并校验，界面会列出缺少的文件。OCR 和文字索引独立加载模型；在 OCR 页签关闭「启用本地 OCR」后，只需导入两个 Qwen 文件即可使用文字语义检索，也不会加载 OCR 模型。之后导入图片、修改描述会自动在后台更新索引；在 Embedding 页签关闭自动索引后，可以手动处理。已完成索引的图片立即参与语义搜索，无需等待整批完成；模型未安装时智能搜索使用关键词匹配，纯语义搜索会明确提示。
+在「偏好设置 → OCR / Embedding」点击「导入本地模型」，可多选下表中的 ONNX 和 tokenizer 文件，自动识别内容并复制到资料库，无需重命名，不移动原文件。支持分批导入并校验，界面会列出缺少的文件。OCR 和文字索引独立加载模型；在 OCR 页签关闭「启用本地 OCR」后，只需导入 Qwen 模型即可使用文字语义检索，也不会加载 OCR 模型。之后导入图片、修改描述会自动在后台更新索引；在 Embedding 页签关闭自动索引后，可以手动处理。已完成索引的图片立即参与语义搜索，无需等待整批完成；模型未安装时智能搜索使用关键词匹配，纯语义搜索会明确提示。
 
 大量导入时，每张图片独立保存并加入待处理队列，导入期间会更新资料库和进度。本地推理一次只处理一张图片，逐张保存 OCR 和向量，失败项不会阻塞后续图片。侧栏「任务管理」分别显示全库已识别 / 未识别、已生成 / 未生成、已索引 / 未索引的数量，未完成数量包含失败项；三类任务使用统一的总进度条，暂停和完成后保留；仅运行时显示当前图片，完成后隐藏继续操作。统计读取已保存的图片状态，重启后保留，清除内容后同步更新。暂停在当前图片处理完成后生效，新增图片不会自动解除暂停。「继续」处理未完成项，「重试失败项」将失败图片重新入队。暂停状态保留到本次应用退出；重启时，已启用且模型就绪的本地任务会继续 SQLite 中的未完成项。尚未保存的导入文件需要重新选择；已导入文件会去重。
 
@@ -68,21 +71,59 @@ Linux / macOS 复制静态 PNG 时直接使用 PNG 数据，避免重复解码�
 
 本地文件导入、模型加载、OCR 和文字搜索不需要外部请求，ONNX Runtime 的遥测在初始化时显式关闭。应用不提供模型联网下载；模型文件需自行准备后导入。本地推理不会上传图片，配置并主动使用下述图片理解 API 时才会发送图片。推理在本地 CPU 执行，每个会话限制为 2 个线程，图片逐张处理。
 
-模型目录在偏好设置中显示。可以从其他机器拷贝以下文件，再通过应用导入。若直接手动复制到模型目录，则需按左栏重命名并重启应用。合计约 647 MB。
+模型目录在偏好设置中显示。OCR 导入下表的 ONNX 文件；所有 Qwen 向量模型统一导入 `memechan-model.json` 模型包。
 
-当前导入仅支持下表固定版本的模型文件，会拒绝损坏或不匹配的文件。任意 ONNX 模型不能通过改文件名直接替换：不同模型的分词器、输入输出、向量维度和处理方式需要对应适配。
+下表的 OCR 文件在导入时校验固定 SHA-256，无需重命名。若直接复制到应用模型目录，则需按左栏重命名并重启应用。
 
-| 本地文件名                  | 固定版本下载地址                                                                                                                                                             |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ocr-v5-det.onnx`           | [PP-OCRv5 mobile detection](https://www.modelscope.cn/api/v1/models/RapidAI/RapidOCR/repo?Revision=v3.9.2&FilePath=onnx/PP-OCRv5/det/ch_PP-OCRv5_det_mobile.onnx)            |
-| `ocr-cls.onnx`              | [Paddle angle classifier](https://huggingface.co/SWHL/RapidOCR/resolve/4e4644045a07c403b1ad40ca97340ecb4a8dc2c1/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx)                |
-| `ocr-v5-rec.onnx`           | [PP-OCRv5 mobile recognition](https://www.modelscope.cn/api/v1/models/RapidAI/RapidOCR/repo?Revision=v3.9.2&FilePath=onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile.onnx)          |
-| `qwen3-embedding-0.6b.onnx` | [Qwen3-Embedding-0.6B quantized](https://huggingface.co/onnx-community/Qwen3-Embedding-0.6B-ONNX/resolve/c25a394dd583836952667c12f008335071b3f43d/onnx/model_quantized.onnx) |
-| `qwen3-tokenizer.json`      | [Qwen tokenizer](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B/resolve/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3/tokenizer.json)                                           |
+| 本地文件名        | 固定版本下载地址                                                                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ocr-v5-det.onnx` | [PP-OCRv5 mobile detection](https://www.modelscope.cn/api/v1/models/RapidAI/RapidOCR/repo?Revision=v3.9.2&FilePath=onnx/PP-OCRv5/det/ch_PP-OCRv5_det_mobile.onnx)   |
+| `ocr-cls.onnx`    | [Paddle angle classifier](https://huggingface.co/SWHL/RapidOCR/resolve/4e4644045a07c403b1ad40ca97340ecb4a8dc2c1/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx)       |
+| `ocr-v5-rec.onnx` | [PP-OCRv5 mobile recognition](https://www.modelscope.cn/api/v1/models/RapidAI/RapidOCR/repo?Revision=v3.9.2&FilePath=onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile.onnx) |
 
-检测与识别使用 PP-OCRv5 mobile ONNX 模型，来自 [RapidAI/RapidOCR 模型库](https://www.modelscope.cn/models/RapidAI/RapidOCR)，固定在 v3.9.2 并校验 SHA-256。文字方向分类继续使用原来的轻量分类器，与 `paddle-ocr-rs` 的 v5 示例一致；识别字典从 ONNX 模型元数据加载。模型清单与校验值在 `src-tauri/src/intelligence.rs`。嵌入模型来自 [Qwen3-Embedding](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B) 的 [ONNX Community 转换](https://huggingface.co/onnx-community/Qwen3-Embedding-0.6B-ONNX)，沿用当前 ONNX Runtime 1.22。分发模型时应保留对应模型许可证。
+检测与识别使用 PP-OCRv5 mobile ONNX 模型，来自 [RapidAI/RapidOCR 模型库](https://www.modelscope.cn/models/RapidAI/RapidOCR)，固定在 v3.9.2 并校验 SHA-256。文字方向分类继续使用原来的轻量分类器；识别字典从 ONNX 模型元数据加载。OCR 文件名与校验值在 `src-tauri/src/intelligence.rs`，库的模型和字典下载均已禁用。嵌入模型使用 [Qwen3-Embedding](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B) 的本地 ONNX 导出，与 OCR 共用 ONNX Runtime 1.28.0。分发模型时应保留对应模型许可证。
 
-从 BGE 升级只需导入 Qwen 权重和分词器，现有 PP-OCRv5 文件继续使用。旧向量会被移除并逐张重建，原图、描述、OCR 文字、收藏和分组保留。模型文件使用独立名称，不会把旧 BGE 分词器误判为 Qwen 已安装。当前发布配置支持 0.6B；后续 4B / 8B 需要对应的已验证 ONNX 文件清单和向量维度配置，更换时必须重建索引，不能混用不同模型的向量。
+模型在首次执行相应的 OCR、索引或语义查询时加载，之后保留会话以供复用，任务结束或暂停不会自动卸载。更换向量模型、导入模型文件或退出应用时释放会话。
+
+### 选择大小与自行导出 Qwen
+
+在「偏好设置 → Embedding → 向量模型」选择 0.6B、4B 或 8B，再导入对应的 `memechan-model.json`；清单引用的 ONNX、外部权重和 tokenizer 会一并复制，无需手动改名。导入前请将清单及其引用的文件放在同一目录。旧版单独导入 ONNX 和 tokenizer 的 0.6B 需要重新通过清单导入；已有 ONNX 可用下文的脚本生成清单，无需重新导出。0.6B 索引版本同时更新，旧索引会重新排队。
+
+切换大小或导入同一大小的新权重，会释放旧推理会话并重新排队索引。原图、OCR、描述、分组和收藏不变；已经主动清除的索引仍需手动建立。不同大小、量化方式或 tokenizer 的向量不会混用。选择未安装的模型后，智能搜索暂用关键词；开启自动索引且任务未暂停时，模型导入完成便逐张重建，否则在任务管理中继续。更换模型前需暂停本地任务并等待当前图片完成。
+
+所有大小均支持 FP32 或 INT8 模型包。本机导出的 0.6B FP32 权重约 2.38 GB（2.22 GiB），运行时还需要工作内存。当前应用仍使用 CPU 推理，并未接入 GPU。大模型加载、索引和搜索需要更多内存与时间；**导出和量化的峰值内存远高于运行 INT8 模型**，不要用“0.6B 推理很轻松”推断这台机器能直接导出 8B。
+
+`scripts/export_qwen.py` 是独立的开发工具，使用 [Hugging Face Optimum 导出接口](https://huggingface.co/docs/optimum-onnx/onnx/package_reference/export) 和 [ONNX Runtime 动态量化](https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html)。它只读取本地权重，关闭 Hub 网络访问；桌面应用不依赖 Python。先在有足够内存的机器准备 Qwen 官方 **Embedding** 权重目录（含 `config.json`、safetensors、tokenizer），以及独立的 Python 工具环境：
+
+```bash
+uv venv --python 3.14 .local/qwen-export-tools
+uv pip install --python .local/qwen-export-tools/bin/python --torch-backend cpu \
+  'torch==2.14.1' 'optimum-onnx[onnxruntime]==0.1.0' \
+  'onnxruntime==1.31.0' 'onnx==1.23.2'
+.local/qwen-export-tools/bin/python scripts/export_qwen.py \
+  --source /path/to/Qwen3-Embedding-0.6B --size 0.6b \
+  --output models/qwen3-embedding-0.6b-official-fp32 --precision fp32
+```
+
+4B / 8B 改为对应权重目录和 `--size 4b` / `--size 8b`。依赖安装可以使用联网环境或离线 wheel；脚本本身不下载模型，并关闭 Python Runtime 遥测。上面的转换工具版本已实测；Optimum ONNX 0.1.0 要求 Transformers `<4.58`，本次解析为 4.57.6。Python Runtime 1.31.0 与应用 Runtime 1.28.0 分别验证，导出产物采用 IR 8、opset 18 和无缓存的 feature-extraction；打包已有 ONNX 时由应用加载阶段检查 Runtime 对 IR 和算子的支持。
+
+脚本默认导出 FP32。`--precision int8` 保留为实验选项，并保留 `fp32/` 中间产物：本次 0.6B 测试中，动态 INT8 与原始 PyTorch 向量出现明显偏移，尝试完整 8 位范围、保留词嵌入及有符号量化均未明显改善。简单检索测试通过并不足以证明量化质量，应使用自己的图片描述和查询验证。此流程尚未在本机完整导出 4B / 8B。
+
+已从 Qwen 官方 0.6B 权重（提交 `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`）完成导出。8 条样本覆盖短词、动作描述、中英文查询及 512 token 长文本，FP32 ONNX 与 PyTorch 的末 token 归一化向量余弦相似度最低为 `0.99999988`。推荐产物在本机 `models/qwen3-embedding-0.6b-official-fp32/`，选择其中的 `memechan-model.json` 导入；实验结果保存在 `models/qwen3-embedding-0.6b-export-experiments/validation.json`。这些目录均已被 Git 忽略。
+
+如果已有自行导出的 ONNX，只需生成清单，不必重复导出。这个步骤只需 `onnx` Python 包：
+
+```bash
+python scripts/export_qwen.py --size 4b \
+  --onnx /path/to/export/model.onnx \
+  --tokenizer /path/to/Qwen3-Embedding-4B/tokenizer.json
+```
+
+脚本检查模型接口、输出维度与外部权重是否齐全，计算 SHA-256，并在 ONNX 所在目录生成清单。支持 `input_ids`、`attention_mask`、可选 `position_ids` / FP32 KV 输入，以及 FP32 的 `last_hidden_state` 或 `token_embeddings` 输出；应用执行末 token 池化与归一化。分词器必须对应原模型，保留特殊 token 处理。
+
+模型包按内容指纹存放在 `models/qwen3-embedding-大小/指纹/`；所有文件校验通过后才切换当前清单。失败或中断的导入不会替换正在使用的模型，重新导入可复用已校验文件。旧版本目录暂时保留，确认新版本正常并退出应用后，可手动删除该型号目录中非当前清单对应的版本。清单校验用于检测文件损坏与区分索引版本，不证明模型来源；应使用自己的导出或可信来源。
+
+已用真实 0.6B 和 4B INT8 模型验证清单生成、本地导入、向量维度、归一化和中英文检索排序。4B 测试使用 [Jasai 的 ONNX 转换](https://huggingface.co/Jasai/Qwen3-Embedding-4B-INT8-ONNX/tree/25095098411b94f4c5bdaf5f4596e7e41046de67)，不代表 4B 自导出流程已验证。8B 已接入模型选择与 4096 维处理，尚未运行真实权重测试。
 
 从 v4 升级后，在「偏好设置 → OCR」导入约 21 MB 的 v5 检测与识别模型即可。原图、描述、收藏和分组保留，旧图片会重新排队识别并更新语义索引；重新识别前仍保留旧 OCR 文字用于关键词搜索。旧的 `ocr-det.onnx`、`ocr-rec.onnx` 不再使用，确认升级成功后可以手动删除。
 
@@ -126,7 +167,7 @@ models/            本地模型
 
 资料库、API 和队列测试放在对应模块的 `tests.rs` 中；`src-tauri/tests/models.rs` 保留需要真实模型的离线集成测试。`benchmarks/embeddings/` 是选型评测资料，不属于日常测试。复制尺寸不会改变检索内容。
 
-依赖使用兼容的稳定版本。TypeScript 保持 6.0.3，不升级到 7；当前 `@typescript-eslint` 支持范围为 `<6.1`。`ort` 固定为 `2.0.0-rc.10`：`paddle-ocr-rs 0.6.1` 仍访问 `Session.inputs` 公共字段，而 `ort rc.13` 已将其改为私有字段与访问方法，需等待 OCR 库适配后再升级。
+TypeScript 保持 6.0.3，不升级到 7；当前 `@typescript-eslint` 支持范围为 `<6.1`。`Cargo.lock` 当前锁定 `ort 2.0.0-rc.13`，使用其默认分发的 ONNX Runtime 1.28.0；`rapid-ocr-rs` 子模块已适配同一版本。清单使用默认版本范围，后续通过更新锁文件升级；RC 之间的 API 变化仍需检查。Rust 的 `ort` 版本与原生 ONNX Runtime 版本分别管理，并非同一个版本号。
 
 ## 检查
 
@@ -150,15 +191,23 @@ pnpm test:ui
 如果已有 Chromium，可以通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定路径，避免重复下载。
 通过 `MEMECHAN_TEST_URL` 可以指定其他本地开发服务地址，默认使用 `http://127.0.0.1:1420/`。
 
-真实模型测试单独执行，先将上表所需文件按应用内文件名放入指定目录。测试只从本地导入到临时目录并推理，不会下载模型：
+真实 OCR 测试单独执行，先将上表的 OCR 文件按应用内文件名放入指定目录。测试只从本地导入到临时目录并推理，不会下载模型：
 
 ```bash
 MEMECHAN_MODEL_TEST_DIR=/tmp/memechan-models \
   cargo test --manifest-path src-tauri/Cargo.toml --no-default-features \
-  --test models -- --ignored --nocapture
+  --test models local_models_import_safely_and_support_ocr -- --ignored --nocapture
 ```
 
-后台队列的真实模型集成测试也不需要桌面系统依赖：
+测试 Qwen 模型包时，将目录指向包含 `memechan-model.json` 的文件夹，并指定大小：
+
+```bash
+MEMECHAN_MODEL_TEST_DIR=/path/to/memechan-qwen4b MEMECHAN_EMBEDDING_MODEL=qwen3-4b \
+  cargo test --manifest-path src-tauri/Cargo.toml --no-default-features \
+  --test models selected_qwen_model_supports_multilingual_search -- --ignored --nocapture
+```
+
+后台队列的真实模型集成测试也不需要桌面系统依赖。指定目录需同时包含上表的 OCR 文件及 0.6B 模型清单和关联文件：
 
 ```bash
 MEMECHAN_MODEL_TEST_DIR=/tmp/memechan-models \

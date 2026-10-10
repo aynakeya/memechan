@@ -118,7 +118,7 @@ desktopTest('编辑描述、复制尺寸、预览及搜索错误恢复', async (
 desktopTest('设置草稿、本地模型与图片理解配置', async (page) => {
   await page.evaluate(() => {
     window.testModel.ready = false
-    window.testModel.missing = ['qwen3-embedding-0.6b.onnx', 'qwen3-tokenizer.json']
+    window.testModel.missing = ['qwen3-embedding-0.6b/memechan-model.json']
     window.testModelImportResult = false
   })
   await page.getByRole('button', { name: '偏好设置' }).click()
@@ -146,6 +146,27 @@ desktopTest('设置草稿、本地模型与图片理解配置', async (page) => 
   })
   await page.getByRole('button', { name: '导入本地模型', exact: true }).click()
   await page.waitForFunction(() => window.testModel.ready)
+  const embeddingModel = page.getByRole('combobox', { name: '向量模型', exact: true })
+  for (const [label, value] of [
+    ['Qwen3-Embedding-4B', 'qwen3-4b'],
+    ['Qwen3-Embedding-8B', 'qwen3-8b'],
+  ]) {
+    await embeddingModel.click()
+    await page.getByRole('option', { name: label, exact: true }).click()
+    await page.waitForFunction(
+      (expected) =>
+        window.testCalls.some(
+          (call) =>
+            call.command === 'save_settings' && call.args.settings.embeddingModel === expected,
+        ),
+      value,
+    )
+    await page.getByText('待安装', { exact: true }).waitFor()
+  }
+  await page.getByRole('button', { name: '关闭弹窗', exact: true }).click()
+  await page.getByRole('button', { name: '偏好设置', exact: true }).click()
+  await page.getByRole('tab', { name: 'Embedding', exact: true }).click()
+  assert.match(await embeddingModel.innerText(), /Qwen3-Embedding-8B/)
   await page.getByRole('tab', { name: '图片理解 API', exact: true }).click()
   assert.equal(
     await page.getByRole('button', { name: '测试图片理解', exact: true }).isEnabled(),

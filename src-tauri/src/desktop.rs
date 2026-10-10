@@ -184,8 +184,8 @@ async fn import_models(
         let Some(files) = app
             .dialog()
             .file()
-            .set_title("导入本地搜索模型（可多选）")
-            .add_filter("模型与分词器", &["onnx", "json"])
+            .set_title("选择 Qwen 模型清单或 OCR 文件")
+            .add_filter("Qwen 模型清单 / OCR 模型", &["json", "onnx"])
             .blocking_pick_files()
         else {
             return Ok(false);

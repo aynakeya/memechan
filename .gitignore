@@ -3,6 +3,7 @@ dist/
 target/
 src-tauri/gen/
 .local/
+/models/
 *.log
 .DS_Store
 .env

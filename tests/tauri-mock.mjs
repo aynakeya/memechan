@@ -35,7 +35,13 @@ const assets = names.map((name, i) => {
     score: null,
   }
 })
-const settings = { copySize: 0, allowUpscale: false, autoIndex: true, ocrEnabled: true }
+const settings = {
+  copySize: 0,
+  allowUpscale: false,
+  autoIndex: true,
+  ocrEnabled: true,
+  embeddingModel: 'qwen3-0.6b',
+}
 const vision = {
   config: {
     baseUrl: 'https://api.deepseek.com',
@@ -165,6 +171,15 @@ mockIPC(
     }
     if (command === 'copy_asset') return '已复制图片'
     if (command === 'save_settings') {
+      if (settings.embeddingModel !== args.settings.embeddingModel) {
+        for (const asset of assets) {
+          if (asset.indexState !== 'idle') asset.indexState = 'pending'
+        }
+        window.testModel.ready = false
+        window.testModel.missing = [
+          `${args.settings.embeddingModel.replace('qwen3-', 'qwen3-embedding-')}/model.onnx`,
+        ]
+      }
       window.testModel.ocrEnabled = args.settings.ocrEnabled
       return Object.assign(settings, args.settings)
     }

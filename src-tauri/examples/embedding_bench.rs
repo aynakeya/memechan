@@ -30,23 +30,23 @@ fn embed(session: &mut Session, tokenizer: &Tokenizer, text: &str) -> Result<(Ve
     let encoding = tokenizer.encode(text, true)?;
     let length = encoding.len();
     let mut inputs = Vec::new();
-    for input in &session.inputs {
+    for input in session.inputs() {
         // This Qwen export includes decoder caches; independent texts start with empty caches.
-        if input.name.starts_with("past_key_values.") {
+        if input.name().starts_with("past_key_values.") {
             let shape = input
-                .input_type
+                .dtype()
                 .tensor_shape()
                 .ok_or("Expected a tensor cache input")?;
             if shape.len() != 4 || shape[1] <= 0 || shape[3] <= 0 {
                 return Err(format!("Unsupported cache shape: {shape:?}").into());
             }
             inputs.push((
-                input.name.clone(),
+                input.name().to_owned(),
                 Tensor::<f32>::new(session.allocator(), [1, shape[1], 0, shape[3]])?.into_dyn(),
             ));
             continue;
         }
-        let values: Vec<i64> = match input.name.as_str() {
+        let values: Vec<i64> = match input.name() {
             "input_ids" => encoding.get_ids().iter().map(|&n| i64::from(n)).collect(),
             "attention_mask" => encoding
                 .get_attention_mask()
@@ -57,7 +57,7 @@ fn embed(session: &mut Session, tokenizer: &Tokenizer, text: &str) -> Result<(Ve
             other => return Err(format!("Unsupported graph input: {other}").into()),
         };
         inputs.push((
-            input.name.clone(),
+            input.name().to_owned(),
             Tensor::from_array(([1, length], values))?.into_dyn(),
         ));
     }
@@ -95,11 +95,13 @@ fn main() -> Result<()> {
     }
     let directory = Path::new(&args[1]);
     let corpus: Corpus = serde_json::from_slice(&fs::read(&args[2])?)?;
-    ort::init().with_telemetry(false).commit()?;
+    ort::init().with_telemetry(false).commit();
     let start = Instant::now();
     let mut session = Session::builder()?
-        .with_intra_threads(2)?
-        .with_inter_threads(1)?
+        .with_intra_threads(2)
+        .map_err(ort::Error::<()>::from)?
+        .with_inter_threads(1)
+        .map_err(ort::Error::<()>::from)?
         .commit_from_file(directory.join("onnx/model_quantized.onnx"))?;
     let mut tokenizer = Tokenizer::from_file(directory.join("tokenizer.json"))?;
     tokenizer.with_padding(None);
@@ -110,8 +112,8 @@ fn main() -> Result<()> {
     let load_ms = start.elapsed().as_secs_f64() * 1000.0;
     eprintln!(
         "Loaded in {load_ms:.0} ms; {} inputs, {} outputs; {}",
-        session.inputs.len(),
-        session.outputs.len(),
+        session.inputs().len(),
+        session.outputs().len(),
         ort::info()
     );
 

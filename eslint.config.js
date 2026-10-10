@@ -5,7 +5,7 @@ import vue from 'eslint-plugin-vue'
 import vueParser from 'vue-eslint-parser'
 
 export default [
-  { ignores: ['dist/**', 'src-tauri/target/**', 'node_modules/**'] },
+  { ignores: ['dist/**', 'src-tauri/target/**', 'node_modules/**', 'vendor/**'] },
   js.configs.recommended,
   {
     files: ['tests/**/*.mjs'],

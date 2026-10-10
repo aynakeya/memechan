@@ -1,4 +1,4 @@
-use crate::{media, Result};
+use crate::{intelligence::EmbeddingModel, media, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -52,6 +52,8 @@ pub struct Settings {
     pub auto_index: bool,
     #[serde(default = "enabled_by_default")]
     pub ocr_enabled: bool,
+    #[serde(default)]
+    pub embedding_model: EmbeddingModel,
 }
 fn enabled_by_default() -> bool {
     true
@@ -63,6 +65,7 @@ impl Default for Settings {
             allow_upscale: false,
             auto_index: true,
             ocr_enabled: true,
+            embedding_model: EmbeddingModel::default(),
         }
     }
 }
@@ -99,6 +102,7 @@ impl TaskKind {
 pub struct Library {
     pub root: PathBuf,
     db: Connection,
+    pub(crate) embedding_version: String,
 }
 impl Library {
     pub fn open(root: &Path) -> Result<Self> {
@@ -142,16 +146,24 @@ impl Library {
             )?;
             tx.commit()?;
         }
+        let mut library = Self {
+            root: root.to_path_buf(),
+            db,
+            embedding_version: String::new(),
+        };
+        let model = library.settings()?.embedding_model;
+        library.embedding_version =
+            crate::intelligence::model_version(&root.join("models"), model)?;
         // Model changes invalidate only vectors; keep existing OCR text and media.
-        let tx = db.transaction()?;
+        let tx = library.db.transaction()?;
         tx.execute(
             "UPDATE assets SET index_state='pending' WHERE id IN
              (SELECT asset_id FROM embeddings WHERE model<>?1)",
-            [crate::intelligence::MODEL_VERSION],
+            [&library.embedding_version],
         )?;
         tx.execute(
             "DELETE FROM embeddings WHERE model<>?1",
-            [crate::intelligence::MODEL_VERSION],
+            [&library.embedding_version],
         )?;
         tx.execute_batch(
             "CREATE INDEX IF NOT EXISTS assets_pending ON assets(created_at)
@@ -159,10 +171,7 @@ impl Library {
             CREATE INDEX IF NOT EXISTS assets_vision_pending ON assets(created_at) WHERE ai_state='pending';",
         )?;
         tx.commit()?;
-        Ok(Self {
-            root: root.to_path_buf(),
-            db,
-        })
+        Ok(library)
     }
     pub fn settings(&self) -> Result<Settings> {
         let json: Option<String> = self
@@ -176,14 +185,30 @@ impl Library {
             None => Ok(Settings::default()),
         }
     }
-    pub fn save_settings(&self, settings: Settings) -> Result<()> {
+    pub fn save_settings(&mut self, settings: Settings) -> Result<()> {
         if settings.copy_size > 4096 {
             return Err("复制最长边不能超过 4096 px".into());
         }
-        self.db.execute(
+        let version = crate::intelligence::model_version(
+            &self.root.join("models"),
+            settings.embedding_model,
+        )?;
+        let changed_model = self.embedding_version != version;
+        let tx = self.db.transaction()?;
+        tx.execute(
             "INSERT INTO settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value",
             [serde_json::to_string(&settings)?],
         )?;
+        if changed_model {
+            // Explicitly cleared indexes stay idle until the user rebuilds them.
+            tx.execute(
+                "UPDATE assets SET index_state='pending' WHERE index_state<>'idle'",
+                [],
+            )?;
+            tx.execute("DELETE FROM embeddings", [])?;
+        }
+        tx.commit()?;
+        self.embedding_version = version;
         Ok(())
     }
     pub fn vision_config(&self) -> Result<Option<crate::vision::VisionConfig>> {
@@ -589,7 +614,7 @@ impl Library {
             .collect();
         let tx = self.db.transaction()?;
         tx.execute("INSERT INTO embeddings VALUES(?1,?2,?3,?4) ON CONFLICT(asset_id) DO UPDATE SET model=excluded.model,source=excluded.source,vector=excluded.vector",
-          params![id,crate::intelligence::MODEL_VERSION,source,bytes])?;
+          params![id,self.embedding_version,source,bytes])?;
         tx.execute("UPDATE assets SET index_state='ready' WHERE id=?1", [id])?;
         tx.commit()?;
         Ok(())
@@ -640,7 +665,7 @@ impl Library {
                 "SELECT asset_id,source,vector FROM embeddings WHERE model=?1 AND
                 (?2 IS NULL OR asset_id IN (SELECT asset_id FROM asset_groups WHERE group_id=?2))",
             )?;
-            let mut rows = statement.query(params![crate::intelligence::MODEL_VERSION, group])?;
+            let mut rows = statement.query(params![self.embedding_version, group])?;
             while let Some(row) = rows.next()? {
                 let id = row.get_ref(0)?.as_str()?;
                 let Some(&index) = positions.get(id) else {

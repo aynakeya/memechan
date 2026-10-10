@@ -38,6 +38,7 @@ const settings = ref<Settings>({
   allowUpscale: false,
   autoIndex: true,
   ocrEnabled: true,
+  embeddingModel: 'qwen3-0.6b',
 })
 const scope = ref<string>('all'),
   query = ref(''),

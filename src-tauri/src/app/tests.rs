@@ -167,11 +167,15 @@ fn wait_until(ready: impl Fn() -> bool) -> Result<()> {
 #[ignore = "offline model inference; set MEMECHAN_MODEL_TEST_DIR"]
 fn indexing_and_search_work_with_ocr_disabled_and_only_qwen_installed() -> Result<()> {
     let source = PathBuf::from(std::env::var("MEMECHAN_MODEL_TEST_DIR")?);
-    let directory = tempfile::tempdir()?;
+    let directory = tempfile::tempdir_in(source.parent().unwrap())?;
     let state = Arc::new(AppState::new(directory.path())?);
-    for name in ["qwen3-embedding-0.6b.onnx", "qwen3-tokenizer.json"] {
-        std::fs::copy(source.join(name), state.models.join(name))?;
-    }
+    intelligence::import_local(
+        &state.models,
+        Default::default(),
+        &[source.join("memechan-model.json")],
+        &AtomicBool::new(false),
+        |_, _, _| {},
+    )?;
     state.save_settings(Settings {
         ocr_enabled: false,
         auto_index: false,
@@ -212,6 +216,12 @@ fn indexing_and_search_work_with_ocr_disabled_and_only_qwen_installed() -> Resul
     let inference = state.intelligence.lock().unwrap();
     state.control_task(TaskKind::Index, TaskAction::Generate, Some(&id))?;
     wait_until(|| !state.local.lock().unwrap().index.message.is_empty())?;
+    assert!(state
+        .save_settings(Settings {
+            embedding_model: intelligence::EmbeddingModel::Qwen4B,
+            ..Default::default()
+        })
+        .is_err());
     state.clear_text(TaskKind::Index, None)?;
     drop(inference);
     wait_until(|| !state.local.lock().unwrap().worker_running)?;
@@ -230,20 +240,50 @@ fn indexing_and_search_work_with_ocr_disabled_and_only_qwen_installed() -> Resul
     state.control_task(TaskKind::Index, TaskAction::Generate, None)?;
     wait_until(|| !state.local.lock().unwrap().worker_running)?;
     assert_eq!(state.model_status()?.index.completed, 2);
+    state.save_settings(Settings {
+        ocr_enabled: false,
+        auto_index: false,
+        embedding_model: intelligence::EmbeddingModel::Qwen4B,
+        ..Default::default()
+    })?;
+    assert!(state.intelligence.lock().unwrap().is_none());
+    let status = state.model_status()?;
+    assert!(!status.ready);
+    assert_eq!(status.index.pending, 2);
+    assert_eq!(status.index.completed, 0);
+    state.save_settings(Settings {
+        ocr_enabled: false,
+        ..Default::default()
+    })?;
+    wait_until(|| !state.local.lock().unwrap().worker_running)?;
+    assert_eq!(state.model_status()?.index.completed, 2);
+    assert_eq!(state.search("salute", "semantic", None)?[0].id, id);
     Ok(())
 }
 
 #[test]
 #[ignore = "offline model inference; set MEMECHAN_MODEL_TEST_DIR"]
 fn bulk_import_joins_active_worker_and_resumes_after_restart() -> Result<()> {
-    let models = PathBuf::from(std::env::var("MEMECHAN_MODEL_TEST_DIR")?);
-    let directory = tempfile::tempdir()?;
+    let source = PathBuf::from(std::env::var("MEMECHAN_MODEL_TEST_DIR")?);
+    let directory = tempfile::tempdir_in(source.parent().unwrap())?;
     let root = directory.path().join("library");
-    let state = Arc::new(AppState {
-        models: models.clone(),
-        intelligence: Mutex::new(Some(Intelligence::load(&models)?)),
-        ..AppState::new(&root)?
-    });
+    let models = root.join("models");
+    for paths in [
+        vec![source.join("memechan-model.json")],
+        intelligence::OCR_FILES
+            .iter()
+            .map(|file| source.join(file.name))
+            .collect(),
+    ] {
+        intelligence::import_local(
+            &models,
+            Default::default(),
+            &paths,
+            &AtomicBool::new(false),
+            |_, _, _| {},
+        )?;
+    }
+    let state = Arc::new(AppState::new(&root)?);
     state.control_task(TaskKind::Ocr, TaskAction::Pause, None)?;
     state.control_task(TaskKind::Index, TaskAction::Pause, None)?;
     let mut paths = Vec::new();
@@ -306,7 +346,6 @@ fn bulk_import_joins_active_worker_and_resumes_after_restart() -> Result<()> {
     let intelligence = state.intelligence.lock().unwrap().take();
     drop(state);
     let restarted = Arc::new(AppState {
-        models,
         intelligence: Mutex::new(intelligence),
         ..AppState::new(&root)?
     });

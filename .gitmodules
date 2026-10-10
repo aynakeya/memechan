@@ -1,0 +1,3 @@
+[submodule "vendor/paddle-ocr-rs"]
+	path = vendor/paddle-ocr-rs
+	url = git@github.com:aynakeya/paddle-ocr-rs.git

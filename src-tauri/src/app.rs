@@ -109,13 +109,40 @@ impl AppState {
     }
     fn with_models<T>(&self, work: impl FnOnce(&mut Intelligence) -> Result<T>) -> Result<T> {
         let mut models = self.intelligence.lock().unwrap();
+        let library = self.library.lock().unwrap();
         if models.is_none() {
-            *models = Some(Intelligence::load(&self.models)?);
+            let model = library.settings()?.embedding_model;
+            *models = Some(Intelligence::load(&self.models, model)?);
         }
+        if models.as_ref().unwrap().version != library.embedding_version {
+            return Err("模型版本正在切换，请等待模型导入完成".into());
+        }
+        drop(library);
         work(models.as_mut().unwrap())
     }
     pub fn save_settings(self: &Arc<Self>, settings: Settings) -> Result<()> {
-        self.library.lock().unwrap().save_settings(settings)?;
+        {
+            let install = self.job.lock().unwrap();
+            let mut local = self.local.lock().unwrap();
+            let version = intelligence::model_version(&self.models, settings.embedding_model)?;
+            let changed_model = self.library.lock().unwrap().embedding_version != version;
+            if changed_model {
+                if install.running || local.worker_running {
+                    return Err("切换模型前请暂停本地任务，并等待当前图片和模型导入完成".into());
+                }
+                // Serialize the switch with search, so query vectors cannot cross models.
+                let mut models = self.intelligence.lock().unwrap();
+                self.library.lock().unwrap().save_settings(settings)?;
+                *models = None;
+                local.index = JobStatus {
+                    paused: local.index.paused,
+                    ..Default::default()
+                };
+                local.index_only = None;
+            } else {
+                self.library.lock().unwrap().save_settings(settings)?;
+            }
+        }
         self.auto_index()
     }
     pub fn clear_text(self: &Arc<Self>, kind: TaskKind, id: Option<&str>) -> Result<usize> {
@@ -155,7 +182,7 @@ impl AppState {
             let missing = if kind == TaskKind::Ocr {
                 intelligence::missing_ocr(&self.models)
             } else {
-                intelligence::missing_embedding(&self.models)
+                intelligence::missing_embedding(&self.models, library.settings()?.embedding_model)
             };
             if !missing.is_empty() {
                 return Err(format!("请先导入模型：{}", missing.join("、")).into());
@@ -198,7 +225,8 @@ impl AppState {
                 (
                     TaskKind::Index,
                     settings.auto_index,
-                    intelligence::missing_embedding(&self.models).is_empty(),
+                    intelligence::missing_embedding(&self.models, settings.embedding_model)
+                        .is_empty(),
                 ),
             ] {
                 let job = local.job(kind);
@@ -358,6 +386,7 @@ impl AppState {
         if job.running || self.local.lock().unwrap().worker_running {
             return Err("请先暂停本地任务并等待当前图片处理完成".into());
         }
+        let model = self.library.lock().unwrap().settings()?.embedding_model;
         *job = JobStatus {
             running: true,
             message: "准备安装模型".into(),
@@ -372,8 +401,28 @@ impl AppState {
                 job.total = total;
                 job.message = message;
             };
-            let result = intelligence::import_local(&state.models, &paths, &state.cancel, progress);
-            *state.intelligence.lock().unwrap() = None;
+            let result =
+                intelligence::import_local(&state.models, model, &paths, &state.cancel, progress)
+                    .and_then(|()| {
+                        let mut models = state.intelligence.lock().unwrap();
+                        *models = None;
+                        let mut library = state.library.lock().unwrap();
+                        let previous_version = library.embedding_version.clone();
+                        let settings = library.settings()?;
+                        library.save_settings(settings)?;
+                        let changed_model = previous_version != library.embedding_version;
+                        drop(library);
+                        drop(models);
+                        if changed_model {
+                            let mut local = state.local.lock().unwrap();
+                            local.index = JobStatus {
+                                paused: local.index.paused,
+                                ..Default::default()
+                            };
+                            local.index_only = None;
+                        }
+                        Ok(())
+                    });
             let proceed = {
                 let mut job = state.job.lock().unwrap();
                 job.running = false;
@@ -566,18 +615,27 @@ impl AppState {
         if query.chars().count() > 4000 {
             return Err("搜索内容过长".into());
         }
-        let mut embedding = None;
         if !query.trim().is_empty() && mode != "keyword" {
-            if intelligence::missing_embedding(&self.models).is_empty() {
-                embedding = Some(self.with_models(|models| models.embed(query, true))?);
-            } else if mode == "semantic" {
-                return Err("语义搜索需要 Qwen 模型与 tokenizer，请先导入并建立索引".into());
-            }
+            return self.with_models(|models| {
+                let embedding = if intelligence::missing_embedding(&self.models, models.model)
+                    .is_empty()
+                {
+                    Some(models.embed(query, true)?)
+                } else if mode == "semantic" {
+                    return Err("语义搜索需要所选 Qwen 模型与 tokenizer，请先导入并建立索引".into());
+                } else {
+                    None
+                };
+                self.library
+                    .lock()
+                    .unwrap()
+                    .search(query, mode, group_id, embedding.as_deref())
+            });
         }
         self.library
             .lock()
             .unwrap()
-            .search(query, mode, group_id, embedding.as_deref())
+            .search(query, mode, group_id, None)
     }
     pub fn model_status(&self) -> Result<ModelStatus> {
         let job = self.job.lock().unwrap().clone();
@@ -588,6 +646,7 @@ impl AppState {
             (local.ocr.clone(), local.index.clone())
         };
         let library = self.library.lock().unwrap();
+        let settings = library.settings()?;
         let counts = |mut job: JobStatus, kind| -> Result<JobStatus> {
             (job.pending, job.failed, job.completed, job.incomplete) = library.task_counts(kind)?;
             job.total = job.done + job.pending + job.failed;
@@ -600,11 +659,12 @@ impl AppState {
             Ok(job)
         };
         Ok(ModelStatus {
-            ready: intelligence::missing_embedding(&self.models).is_empty(),
+            ready: intelligence::missing_embedding(&self.models, settings.embedding_model)
+                .is_empty(),
             ocr_ready: intelligence::missing_ocr(&self.models).is_empty(),
-            ocr_enabled: library.settings()?.ocr_enabled,
+            ocr_enabled: settings.ocr_enabled,
             directory: self.models.to_string_lossy().into_owned(),
-            missing: intelligence::missing(&self.models),
+            missing: intelligence::missing(&self.models, settings.embedding_model),
             job,
             import,
             ocr: counts(ocr, TaskKind::Ocr)?,
