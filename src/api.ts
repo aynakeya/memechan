@@ -15,6 +15,7 @@ import type {
   TaskKind,
   TaskAction,
   ClearKind,
+  CopyCacheUsage,
 } from './types'
 
 export const isDesktop = isTauri()
@@ -39,6 +40,8 @@ export const api = {
   deleteGroup: (id: number) => invoke<void>('delete_group', { id }),
   saveSettings: (settings: Settings) => invoke<void>('save_settings', { settings }),
   copy: (id: string, size: number | null) => invoke<string>('copy_asset', { id, size }),
+  copyCache: () => invoke<CopyCacheUsage>('copy_cache_status'),
+  clearCopyCache: () => invoke<CopyCacheUsage>('clear_copy_cache'),
   models: () => invoke<ModelStatus>('model_status'),
   importModels: () => invoke<boolean>('import_models'),
   task: (kind: TaskKind, action: TaskAction, id: string | null = null) =>

@@ -4,11 +4,53 @@ use crate::{
 };
 #[cfg(target_os = "windows")]
 use clipboard_rs::{common::RustImage, RustImageData};
-use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
-use std::{path::Path, sync::Mutex};
+use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext, ContentFormat};
+use std::{
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 #[derive(Default)]
-pub struct ClipboardState(Mutex<Option<ClipboardContext>>);
+struct ClipboardSession {
+    context: Option<ClipboardContext>,
+    last_copy: Option<PathBuf>,
+}
+#[derive(Default)]
+pub struct ClipboardState(Mutex<ClipboardSession>);
 impl ClipboardState {
+    pub fn referenced_files(&self) -> Result<Vec<PathBuf>> {
+        let mut clipboard = self.0.lock().unwrap();
+        if clipboard.context.is_none() {
+            clipboard.context = Some(ClipboardContext::new()?);
+        }
+        let context = clipboard.context.as_ref().unwrap();
+        // has() alone masks read errors on some platforms.
+        let formats = context.available_formats()?;
+        let mut paths: Vec<PathBuf> = clipboard.last_copy.iter().cloned().collect();
+        if formats.iter().any(|format| format == "text/uri-list")
+            || context.has(ContentFormat::Files)
+        {
+            let files = context.get_files()?;
+            if files.is_empty() {
+                return Err("无法读取当前剪贴板文件".into());
+            }
+            for file in files {
+                if let Some(path) = file.strip_prefix("file://") {
+                    // clipboard-rs emits raw file URIs on Linux; other apps may escape them.
+                    paths.push(PathBuf::from(path));
+                    if let Some(path) = tauri::Url::parse(&file)
+                        .ok()
+                        .and_then(|url| url.to_file_path().ok())
+                    {
+                        paths.push(path);
+                    }
+                } else {
+                    paths.push(PathBuf::from(file));
+                }
+            }
+        }
+        Ok(paths)
+    }
+
     pub fn copy(
         &self,
         asset: &Asset,
@@ -20,8 +62,8 @@ impl ClipboardState {
         let mut clipboard = self.0.lock().unwrap();
         let size = size.unwrap_or(settings.copy_size);
         let path = media::prepare_copy(asset, root, size, settings.allow_upscale)?;
-        if clipboard.is_none() {
-            *clipboard = Some(ClipboardContext::new()?);
+        if clipboard.context.is_none() {
+            clipboard.context = Some(ClipboardContext::new()?);
         }
         let mut contents = vec![ClipboardContent::Files(vec![path
             .to_string_lossy()
@@ -71,7 +113,8 @@ impl ClipboardState {
                 media::clipboard_png(&path)?,
             ));
         }
-        clipboard.as_ref().unwrap().set(contents)?;
+        clipboard.context.as_ref().unwrap().set(contents)?;
+        clipboard.last_copy = Some(path);
         Ok(if asset.animated {
             "已复制动图文件；粘贴效果取决于目标应用的文件粘贴支持".into()
         } else {

@@ -52,6 +52,8 @@ const vision = {
   active: false,
 }
 window.testCalls = []
+window.testAssets = assets
+window.testCopyCache = { bytes: 32 * 1048576, files: 24, limitBytes: 512 * 1048576, error: null }
 window.testModelImportResult = true
 const job = () => ({
   running: false,
@@ -66,6 +68,7 @@ const job = () => ({
   error: null,
 })
 window.testModel = {
+  libraryRevision: 0,
   ocrReady: true,
   ocrEnabled: true,
   ready: true,
@@ -84,6 +87,7 @@ mockIPC(
     if (command === 'snapshot')
       return JSON.parse(
         JSON.stringify({
+          revision: window.testModel.libraryRevision,
           assets,
           groups: [{ id: 1, name: '打工日常', color: '#88966d', count: 3 }],
           settings,
@@ -103,6 +107,7 @@ mockIPC(
     }
     if (command === 'vision_status') return JSON.parse(JSON.stringify(vision))
     if (command === 'save_vision_config') {
+      window.testModel.libraryRevision++
       vision.config = { ...args.config }
       vision.active = true
       return
@@ -116,6 +121,7 @@ mockIPC(
         return
       }
       Object.assign(task, { running: true, paused: false, done: 0, error: null, failed: 0 })
+      window.testModel.libraryRevision++
       if (args.kind === 'index' && args.action === 'generate') {
         for (const asset of assets) {
           if (['idle', 'error'].includes(asset.indexState)) asset.indexState = 'pending'
@@ -127,6 +133,7 @@ mockIPC(
         asset.aiState = 'pending'
         task.pending = 1
         window.setTimeout(() => {
+          window.testModel.libraryRevision++
           if (asset.aiState === 'pending')
             Object.assign(asset, {
               aiDescription: '女孩举手敬礼，表示收到。',
@@ -139,6 +146,7 @@ mockIPC(
       return
     }
     if (command === 'clear_text') {
+      window.testModel.libraryRevision++
       const selected = assets.filter((asset) => !args.id || asset.id === args.id)
       for (const asset of selected) {
         if (args.kind === 'ocr') Object.assign(asset, { ocrText: '', ocrState: 'idle' })
@@ -164,13 +172,20 @@ mockIPC(
         await new Promise((resolve) => {
           window.testFinishSave = resolve
         })
+      window.testModel.libraryRevision++
       return Object.assign(
         assets.find((a) => a.id === args.id),
         { description: args.description, favorite: args.favorite, groups: args.groups },
       )
     }
     if (command === 'copy_asset') return '已复制图片'
+    if (command === 'copy_cache_status') return window.structuredClone(window.testCopyCache)
+    if (command === 'clear_copy_cache') {
+      if (window.testCopyCache.error) throw new Error(window.testCopyCache.error)
+      return Object.assign(window.testCopyCache, { bytes: 2 * 1048576, files: 1 })
+    }
     if (command === 'save_settings') {
+      window.testModel.libraryRevision++
       if (settings.embeddingModel !== args.settings.embeddingModel) {
         for (const asset of assets) {
           if (asset.indexState !== 'idle') asset.indexState = 'pending'
@@ -189,6 +204,7 @@ mockIPC(
         Object.assign(window.testModel.import, { running: true, done: 0, total: args.paths.length })
         for (const path of args.paths) {
           assets.push({ ...assets[0], id: path, name: path, groups: [] })
+          window.testModel.libraryRevision++
           window.testModel.import.done++
           if (window.testModel.import.done === 1)
             await new Promise((resolve) => {

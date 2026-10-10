@@ -135,15 +135,23 @@
   text-align: center;
 }
 .asset-grid {
+  --asset-min-width: 165px;
+  --asset-gap: 16px;
+  position: relative;
+  flex-shrink: 0;
+}
+.asset-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
-  gap: 16px;
+  gap: var(--asset-gap);
   align-content: start;
-  padding-bottom: 24px;
 }
 .asset-grid.compact {
-  grid-template-columns: repeat(auto-fill, minmax(125px, 1fr));
-  gap: 12px;
+  --asset-min-width: 125px;
+  --asset-gap: 12px;
 }
 .asset-card {
   min-width: 0;
@@ -196,11 +204,16 @@
   opacity: 1;
 }
 .asset-caption {
+  height: 24px;
   display: flex;
   align-items: center;
   gap: 4px;
   margin: 7px 0 2px;
   padding-left: 4px;
+}
+.asset-description {
+  height: 16px;
+  line-height: 16px;
 }
 .add-tile {
   align-self: start;
@@ -280,7 +293,7 @@
     padding-inline: 40px;
   }
   .asset-grid {
-    grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
+    --asset-min-width: 185px;
   }
 }
 @media (max-width: 1120px) {
@@ -324,8 +337,8 @@
     padding-inline: 16px;
   }
   .asset-grid {
-    grid-template-columns: repeat(auto-fill, minmax(144px, 1fr));
-    gap: 12px;
+    --asset-min-width: 144px;
+    --asset-gap: 12px;
   }
 }
 @media (max-width: 799px), (max-height: 600px) {

@@ -148,8 +148,10 @@ let searchTimer: ReturnType<typeof setTimeout>,
 let listScrollTop = 0
 let unlistenDrop: (() => void) | undefined
 let refreshingModels = false
+let libraryRevision = -1
 async function refresh() {
   const data = await api.snapshot()
+  libraryRevision = data.revision
   assets.value = data.assets
   groups.value = data.groups
   settings.value = data.settings
@@ -167,12 +169,7 @@ async function refreshModels() {
     const previous = model.value
     model.value = await api.models()
     if (previous) {
-      const changed = (['job', 'import', 'ocr', 'index', 'vision'] as const).some(
-        (key) =>
-          previous[key].done !== model.value![key].done ||
-          previous[key].running !== model.value![key].running,
-      )
-      if (changed) await refreshLibrary()
+      if (model.value.libraryRevision !== libraryRevision) await refreshLibrary()
       for (const key of ['job', 'ocr', 'index', 'vision'] as const) {
         const after = model.value[key]
         if (previous[key].running && !after.running && after.error) notify(after.error, true)
@@ -872,6 +869,7 @@ onBeforeUnmount(() => {
         </div>
         <AssetGrid
           v-else
+          :scroll-element="mainContent"
           :assets="visible"
           :selected-id="selectedId"
           :copying="copying"

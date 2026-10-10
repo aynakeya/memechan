@@ -259,7 +259,17 @@ fn importing_duplicates_preserves_membership_and_group_deletion_keeps_files() ->
     assert_eq!(library.import_files(&paths, Some(group.id)).duplicates, 1);
     assert_eq!(library.assets()?.len(), 1);
     assert_eq!(library.assets()?[0].groups, vec![group.id]);
+    let other = directory.path().join("other.png");
+    image::RgbaImage::new(4, 4).save(&other)?;
+    let (id, bytes) = crate::import::read_source(&other)?;
+    let prepared = PreparedImport::new(&library.root, &other, id, &bytes)?;
+    // A group may be deleted while the new image is being prepared outside the lock.
     library.delete_group(group.id)?;
+    assert!(library.insert_import(prepared, Some(group.id)).is_err());
+    assert_eq!(library.assets()?.len(), 1);
+    for directory in ["originals", "thumbnails"] {
+        assert_eq!(fs::read_dir(library.root.join(directory))?.count(), 1);
+    }
     let asset = library.assets()?.remove(0);
     assert!(asset.groups.is_empty());
     assert!(Path::new(&asset.path).exists());
@@ -337,7 +347,14 @@ fn model_changes_requeue_vectors_without_repeating_ocr() -> Result<()> {
     library.update_ocr(&asset.id, "收到")?;
     library.save_asset(&asset.id, "举手敬礼", true, &[])?;
     let text = Library::search_text(&library.asset(&asset.id)?);
+    library.set_embedding_version("installed-model-fingerprint")?;
     library.put_embedding(&asset.id, &text, &[1.0, 0.0])?;
+    // An existing database learns its version from stored vectors during migration.
+    library.db.execute_batch("DROP TABLE index_model")?;
+    drop(library);
+    let library = Library::open(&root)?;
+    assert_eq!(library.embedding_version, "installed-model-fingerprint");
+    assert_eq!(library.asset(&asset.id)?.index_state, "ready");
     library
         .db
         .execute("UPDATE embeddings SET model='previous-model'", [])?;

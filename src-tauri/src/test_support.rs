@@ -51,3 +51,28 @@ pub fn server(
 pub fn completion(text: &str) -> Value {
     json!({"model":"test-vision","choices":[{"finish_reason":"stop","message":{"content":text}}]})
 }
+
+// Synchronous fixture setup uses the same preparation/publication boundary as the app.
+impl crate::library::Library {
+    pub fn import_files(
+        &mut self,
+        paths: &[String],
+        group: Option<i64>,
+    ) -> crate::library::ImportReport {
+        let mut report = crate::library::ImportReport::default();
+        for path in paths {
+            let result = (|| -> Result<bool> {
+                let path = std::path::Path::new(path);
+                let (id, bytes) = crate::import::read_source(path)?;
+                let prepared = crate::import::PreparedImport::new(&self.root, path, id, &bytes)?;
+                self.insert_import(prepared, group)
+            })();
+            match result {
+                Ok(true) => report.added += 1,
+                Ok(false) => report.duplicates += 1,
+                Err(error) => report.errors.push(format!("{path}：{error}")),
+            }
+        }
+        report
+    }
+}

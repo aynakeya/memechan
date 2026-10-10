@@ -1,7 +1,6 @@
-use crate::{intelligence::EmbeddingModel, media, Result};
+use crate::{import::PreparedImport, intelligence::EmbeddingModel, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs,
@@ -71,6 +70,7 @@ impl Default for Settings {
 }
 #[derive(Serialize)]
 pub struct Snapshot {
+    pub revision: u64,
     pub assets: Vec<Asset>,
     pub groups: Vec<Group>,
     pub settings: Settings,
@@ -123,8 +123,10 @@ impl Library {
             group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE, PRIMARY KEY(asset_id,group_id));
           CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS vision_settings (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS index_model (id INTEGER PRIMARY KEY CHECK(id=1), version TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS embeddings (asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
-            model TEXT NOT NULL, source TEXT NOT NULL, vector BLOB NOT NULL);")?;
+            model TEXT NOT NULL, source TEXT NOT NULL, vector BLOB NOT NULL);
+          INSERT OR IGNORE INTO index_model SELECT 1,model FROM embeddings LIMIT 1;")?;
         let version: u32 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version < 2 {
             // Keep existing OCR text searchable until the imported v5 models replace it.
@@ -152,10 +154,19 @@ impl Library {
             embedding_version: String::new(),
         };
         let model = library.settings()?.embedding_model;
-        library.embedding_version =
-            crate::intelligence::model_version(&root.join("models"), model)?;
+        library.embedding_version = library
+            .db
+            .query_row("SELECT version FROM index_model WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .unwrap_or_else(|| model.version().to_owned());
         // Model changes invalidate only vectors; keep existing OCR text and media.
         let tx = library.db.transaction()?;
+        tx.execute(
+            "INSERT OR IGNORE INTO index_model VALUES(1,?1)",
+            [&library.embedding_version],
+        )?;
         tx.execute(
             "UPDATE assets SET index_state='pending' WHERE id IN
              (SELECT asset_id FROM embeddings WHERE model<>?1)",
@@ -189,11 +200,7 @@ impl Library {
         if settings.copy_size > 4096 {
             return Err("复制最长边不能超过 4096 px".into());
         }
-        let version = crate::intelligence::model_version(
-            &self.root.join("models"),
-            settings.embedding_model,
-        )?;
-        let changed_model = self.embedding_version != version;
+        let changed_model = self.settings()?.embedding_model != settings.embedding_model;
         let tx = self.db.transaction()?;
         tx.execute(
             "INSERT INTO settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value",
@@ -206,10 +213,34 @@ impl Library {
                 [],
             )?;
             tx.execute("DELETE FROM embeddings", [])?;
+            tx.execute(
+                "UPDATE index_model SET version=?1 WHERE id=1",
+                [settings.embedding_model.version()],
+            )?;
         }
         tx.commit()?;
-        self.embedding_version = version;
+        if changed_model {
+            self.embedding_version = settings.embedding_model.version().to_owned();
+        }
         Ok(())
+    }
+    pub fn set_embedding_version(&mut self, version: &str) -> Result<bool> {
+        if self.embedding_version == version {
+            return Ok(false);
+        }
+        let tx = self.db.transaction()?;
+        tx.execute(
+            "UPDATE assets SET index_state='pending' WHERE index_state<>'idle'",
+            [],
+        )?;
+        tx.execute("DELETE FROM embeddings", [])?;
+        tx.execute("UPDATE index_model SET version=?1 WHERE id=1", [version])?;
+        tx.commit()?;
+        self.embedding_version = version.to_owned();
+        Ok(true)
+    }
+    pub fn revision(&self) -> u64 {
+        self.db.total_changes()
     }
     pub fn vision_config(&self) -> Result<Option<crate::vision::VisionConfig>> {
         let json: Option<String> = self
@@ -406,6 +437,7 @@ impl Library {
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
         Ok(Snapshot {
+            revision: self.revision(),
             assets: self.assets()?,
             groups: self.groups()?,
             settings: self.settings()?,
@@ -492,38 +524,10 @@ impl Library {
         }
         Ok(())
     }
-    pub fn import_files(&mut self, paths: &[String], group: Option<i64>) -> ImportReport {
-        let mut report = ImportReport::default();
-        for path in paths {
-            match self.import_one(Path::new(path), group) {
-                Ok(true) => report.added += 1,
-                Ok(false) => report.duplicates += 1,
-                Err(error) => report.errors.push(format!(
-                    "{}：{error}",
-                    Path::new(path)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                )),
-            }
-        }
-        report
-    }
-    fn import_one(&mut self, path: &Path, group: Option<i64>) -> Result<bool> {
-        if !path.is_file() {
-            return Err("请拖入图片文件，暂不支持文件夹".into());
-        }
-        if fs::metadata(path)?.len() > 100 * 1024 * 1024 {
-            return Err("单张图片不能超过 100 MB".into());
-        }
-        let bytes = fs::read(path)?;
-        let id: String = Sha256::digest(&bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+    pub fn attach_duplicate(&self, id: &str, group: Option<i64>) -> Result<bool> {
         let exists: bool = self.db.query_row(
             "SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)",
-            [&id],
+            [id],
             |row| row.get(0),
         )?;
         if exists {
@@ -533,13 +537,18 @@ impl Library {
                     params![id, group],
                 )?;
             }
+        }
+        Ok(exists)
+    }
+    pub fn insert_import(&mut self, prepared: PreparedImport, group: Option<i64>) -> Result<bool> {
+        let id = &prepared.id;
+        if self.attach_duplicate(id, group)? {
             return Ok(false);
         }
-        let info = media::inspect(&bytes)?;
         let original = self
             .root
             .join("originals")
-            .join(format!("{id}.{}", info.extension));
+            .join(format!("{id}.{}", prepared.format));
         let thumbnail = self.root.join("thumbnails").join(format!("{id}.png"));
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
         let auto_describe = self
@@ -551,12 +560,12 @@ impl Library {
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
                 id,
-                path.file_stem().unwrap_or_default().to_string_lossy(),
-                info.extension,
-                info.preview.width(),
-                info.preview.height(),
-                bytes.len() as u64,
-                info.animated,
+                prepared.name,
+                prepared.format,
+                prepared.width,
+                prepared.height,
+                prepared.bytes as u64,
+                prepared.animated,
                 now
             ],
         )?;
@@ -567,8 +576,8 @@ impl Library {
             tx.execute("UPDATE assets SET ai_state='pending' WHERE id=?1", [&id])?;
         }
         let result = (|| -> Result<()> {
-            fs::write(&original, &bytes)?;
-            info.preview.thumbnail(384, 384).save(&thumbnail)?;
+            prepared.original.persist(&original)?;
+            prepared.thumbnail.persist(&thumbnail)?;
             tx.commit()?;
             Ok(())
         })();

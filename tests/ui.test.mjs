@@ -143,6 +143,7 @@ desktopTest('详情开关、编辑描述、复制尺寸、预览及搜索错误�
     input.dispatchEvent(new window.InputEvent('input', { bubbles: true, isComposing: true }))
     // A task refresh must not trigger a search for unfinished composition either.
     window.testModel.job.done++
+    window.testModel.libraryRevision++
   })
   await page.waitForTimeout(2000)
   assert.deepEqual(
@@ -165,6 +166,93 @@ desktopTest('详情开关、编辑描述、复制尺寸、预览及搜索错误�
   )
   await page.getByRole('button', { name: '清空搜索' }).click()
   await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 6)
+})
+
+desktopTest('大资料库虚拟滚动、尺寸切换和后台刷新', async (page) => {
+  await page.waitForFunction(() => window.testCalls.some((call) => call.command === 'model_status'))
+  const snapshots = await page.evaluate(
+    () => window.testCalls.filter((call) => call.command === 'snapshot').length,
+  )
+  await page.evaluate(() => {
+    window.testModel.job.running = true
+    window.testModel.job.done++
+  })
+  await page.waitForTimeout(1800)
+  assert.equal(
+    await page.evaluate(
+      () => window.testCalls.filter((call) => call.command === 'snapshot').length,
+    ),
+    snapshots,
+  )
+  await page.evaluate(() => {
+    const template = window.testAssets[0]
+    const assets = Array.from({ length: 2000 }, (_, i) => ({
+      ...template,
+      id: `large-${i}`,
+      name: `大量表情 ${i}`,
+      createdAt: 2000 - i,
+      animated: i === 1999,
+    }))
+    window.testAssets.splice(0, window.testAssets.length, ...assets)
+    window.testModel.libraryRevision++
+    window.testModel.job.running = false
+  })
+  const first = page.getByRole('article', { name: '大量表情 0', exact: true })
+  const last = page.getByRole('article', { name: '大量表情 1999', exact: true })
+  await first.waitFor()
+  assert.ok((await page.locator('.asset-card').count()) < 100)
+  await page.locator('main').evaluate((main) => {
+    main.scrollTop = main.scrollHeight
+  })
+  await last.waitFor()
+  assert.equal(await first.count(), 0)
+  await last.dblclick()
+  await page.waitForFunction(() =>
+    window.testCalls.some((call) => call.command === 'copy_asset' && call.args.id === 'large-1999'),
+  )
+  await last.click({ button: 'right' })
+  await page.locator('main').evaluate((main) => {
+    main.scrollTop = 0
+  })
+  await page.locator('.asset-card[aria-label="大量表情 0"]').waitFor()
+  // A scrolled-away card stays mounted until its open menu closes.
+  await page.getByRole('menuitem', { name: '最长边 256 px', exact: true }).focus()
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(() =>
+    window.testCalls.some(
+      (call) =>
+        call.command === 'copy_asset' && call.args.id === 'large-1999' && call.args.size === 256,
+    ),
+  )
+  await page.locator('main').evaluate((main) => {
+    main.scrollTop = 0
+  })
+  await last.waitFor({ state: 'detached' })
+  await page.getByRole('button', { name: '切换为紧凑网格' }).click()
+  for (const width of [640, 1550]) {
+    await page.setViewportSize({ width, height: 600 })
+    await page.locator('main').evaluate((main) => {
+      main.scrollTop = main.scrollHeight
+    })
+    await last.waitFor()
+    assert.ok((await page.locator('.asset-card').count()) < 100)
+    const layout = await page.locator('.asset-grid').evaluate((grid) => {
+      const rows = [...grid.querySelectorAll('.asset-row')].map((row) =>
+        row.getBoundingClientRect(),
+      )
+      return {
+        overlap: rows.some((row, i) => i > 0 && row.top < rows[i - 1].bottom - 1),
+        overflow:
+          document.querySelector('main').scrollWidth > document.querySelector('main').clientWidth,
+      }
+    })
+    assert.deepEqual(layout, { overlap: false, overflow: false })
+  }
+  await page.getByRole('button', { name: '只看动图' }).click()
+  await last.waitFor()
+  assert.equal(await page.locator('.asset-card').count(), 1)
+  await page.getByRole('button', { name: '只看动图' }).click()
+  await first.waitFor()
 })
 
 desktopTest('窗口切换保留草稿与列表位置，预览不被详情遮挡', async (page) => {
@@ -262,6 +350,30 @@ desktopTest('窗口切换保留草稿与列表位置，预览不被详情遮挡'
   assert.equal(await page.locator('.details-panel').count(), 0)
 })
 
+desktopTest('复制缓存显示占用、保留清理结果并呈现错误', async (page) => {
+  await page.setViewportSize({ width: 640, height: 480 })
+  await page.getByRole('button', { name: '偏好设置', exact: true }).click()
+  const cache = page.getByRole('region', { name: '复制缓存', exact: true })
+  await cache.getByText('32.0 MB · 24 个文件 · 软上限 512 MiB', { exact: true }).waitFor()
+  const clear = cache.getByRole('button', { name: '清理复制缓存', exact: true })
+  await clear.click()
+  await cache.getByText('2.0 MB · 1 个文件 · 软上限 512 MiB', { exact: true }).waitFor()
+  assert.ok(
+    await page.evaluate(() => window.testCalls.some((call) => call.command === 'clear_copy_cache')),
+  )
+  await page.evaluate(() => {
+    window.testCopyCache.error = '无法读取当前剪贴板文件，已跳过缓存清理'
+  })
+  await clear.click()
+  await cache.getByRole('alert').filter({ hasText: '已跳过缓存清理' }).waitFor()
+  await page.evaluate(() => {
+    window.testCopyCache.error = null
+  })
+  await cache.getByRole('button', { name: '刷新', exact: true }).click()
+  await cache.getByRole('alert').waitFor({ state: 'hidden' })
+  await cache.getByText('2.0 MB · 1 个文件 · 软上限 512 MiB', { exact: true }).waitFor()
+})
+
 desktopTest('设置草稿、本地模型与图片理解配置', async (page) => {
   await page.evaluate(() => {
     window.testModel.ready = false
@@ -275,6 +387,7 @@ desktopTest('设置草稿、本地模型与图片理解配置', async (page) => 
   )
   await page.evaluate(() => {
     window.testModel.job.done++
+    window.testModel.libraryRevision++
   })
   await page.waitForFunction(
     (count) => window.testCalls.filter((call) => call.command === 'snapshot').length > count,

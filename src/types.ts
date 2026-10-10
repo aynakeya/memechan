@@ -35,9 +35,16 @@ export interface Settings {
   embeddingModel: 'qwen3-0.6b' | 'qwen3-4b' | 'qwen3-8b'
 }
 export interface Snapshot {
+  revision: number
   assets: Asset[]
   groups: Group[]
   settings: Settings
+}
+export interface CopyCacheUsage {
+  bytes: number
+  files: number
+  limitBytes: number
+  error: string | null
 }
 export interface JobStatus {
   running: boolean
@@ -52,6 +59,7 @@ export interface JobStatus {
   error: string | null
 }
 export interface ModelStatus {
+  libraryRevision: number
   ready: boolean
   ocrReady: boolean
   ocrEnabled: boolean

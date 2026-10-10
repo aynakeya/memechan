@@ -1,11 +1,15 @@
 use crate::{
     app::{AppState, ModelStatus, TaskAction, VisionStatus},
     clipboard::ClipboardState,
+    copy_cache::{CacheUsage, CopyCache, LIMIT_BYTES},
     library::{Asset, Group, ImportReport, Settings, Snapshot, TaskKind},
     vision::{Description, VisionConfig},
     Result,
 };
-use std::sync::Arc;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 type CommandResult<T> = std::result::Result<T, String>;
@@ -113,11 +117,13 @@ async fn save_settings(state: State<'_, Arc<AppState>>, settings: Settings) -> C
 async fn copy_asset(
     state: State<'_, Arc<AppState>>,
     clipboard: State<'_, Arc<ClipboardState>>,
+    cache: State<'_, Arc<Mutex<CopyCache>>>,
     id: String,
     size: Option<u32>,
 ) -> CommandResult<String> {
     let state = Arc::clone(state.inner());
     let clipboard = Arc::clone(clipboard.inner());
+    let cache = Arc::clone(cache.inner());
     blocking(move || {
         let (asset, settings, root) = {
             let library = state.library.lock().unwrap();
@@ -127,7 +133,31 @@ async fn copy_asset(
                 library.root.clone(),
             )
         };
+        // Lock cache before clipboard, through file preparation and clipboard publication.
+        let _cache = cache.lock().unwrap();
         clipboard.copy(&asset, &root, &settings, size)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn copy_cache_status(cache: State<'_, Arc<Mutex<CopyCache>>>) -> CommandResult<CacheUsage> {
+    let cache = Arc::clone(cache.inner());
+    blocking(move || cache.lock().unwrap().usage()).await
+}
+
+#[tauri::command]
+async fn clear_copy_cache(
+    cache: State<'_, Arc<Mutex<CopyCache>>>,
+    clipboard: State<'_, Arc<ClipboardState>>,
+) -> CommandResult<CacheUsage> {
+    let cache = Arc::clone(cache.inner());
+    let clipboard = Arc::clone(clipboard.inner());
+    blocking(move || {
+        cache
+            .lock()
+            .unwrap()
+            .clean(0, || clipboard.referenced_files())
     })
     .await
 }
@@ -212,7 +242,30 @@ pub fn run() {
             let state = Arc::new(
                 AppState::new(&root).map_err(|error| error as Box<dyn std::error::Error>)?,
             );
-            app.manage(Arc::new(ClipboardState::default()));
+            let clipboard = Arc::new(ClipboardState::default());
+            let cache = Arc::new(Mutex::new(CopyCache::new(root)));
+            let cache_worker = Arc::downgrade(&cache);
+            let clipboard_worker = Arc::downgrade(&clipboard);
+            std::thread::spawn(move || loop {
+                let (Some(cache), Some(clipboard)) =
+                    (cache_worker.upgrade(), clipboard_worker.upgrade())
+                else {
+                    break;
+                };
+                // Keep the cache locked from reading protected paths through deleting files.
+                if let Err(error) = cache
+                    .lock()
+                    .unwrap()
+                    .clean(LIMIT_BYTES, || clipboard.referenced_files())
+                {
+                    eprintln!("复制缓存回收失败：{error}");
+                }
+                drop(cache);
+                drop(clipboard);
+                std::thread::sleep(Duration::from_secs(60));
+            });
+            app.manage(cache);
+            app.manage(clipboard);
             state
                 .auto_index()
                 .map_err(|error| error as Box<dyn std::error::Error>)?;
@@ -230,6 +283,8 @@ pub fn run() {
             delete_group,
             save_settings,
             copy_asset,
+            copy_cache_status,
+            clear_copy_cache,
             model_status,
             import_models,
             control_task,

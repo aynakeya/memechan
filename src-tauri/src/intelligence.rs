@@ -197,7 +197,7 @@ pub fn import_local(
 pub struct Intelligence {
     directory: PathBuf,
     pub model: EmbeddingModel,
-    pub version: String,
+    pub version: std::result::Result<String, String>,
     ocr: Option<RapidOcr>,
     embedding: Option<Embedding>,
 }
@@ -212,7 +212,7 @@ impl Intelligence {
         Ok(Self {
             directory: directory.to_path_buf(),
             model,
-            version: model_version(directory, model)?,
+            version: model_version(directory, model).map_err(|error| error.to_string()),
             ocr: None,
             embedding: None,
         })
@@ -249,6 +249,7 @@ impl Intelligence {
         Ok(())
     }
     pub fn ensure_embedding(&mut self) -> Result<()> {
+        self.version.as_ref().map_err(|error| error.clone())?;
         if self.embedding.is_some() {
             return Ok(());
         }

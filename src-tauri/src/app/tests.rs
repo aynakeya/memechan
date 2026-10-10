@@ -1,6 +1,66 @@
 use super::*;
 
 #[test]
+fn invalid_embedding_manifest_does_not_block_library_operations() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("library");
+    let source = directory.path().join("敬礼.png");
+    image::RgbaImage::new(4, 4).save(&source)?;
+    let paths = [source.to_string_lossy().into_owned()];
+    let state = Arc::new(AppState::new(&root)?);
+    assert_eq!(state.import_paths(&paths, None)?.added, 1);
+    let id = {
+        let mut library = state.library.lock().unwrap();
+        let asset = library.assets()?.remove(0);
+        library.set_embedding_version("installed-model-fingerprint")?;
+        library.put_embedding(&asset.id, &Library::search_text(&asset), &[1.0, 0.0])?;
+        asset.id
+    };
+    drop(state);
+
+    let model_directory = root
+        .join("models")
+        .join(intelligence::EmbeddingModel::default().directory());
+    std::fs::create_dir_all(&model_directory)?;
+    for manifest in ["{", "{}"] {
+        std::fs::write(model_directory.join("memechan-model.json"), manifest)?;
+        let state = Arc::new(AppState::new(&root)?);
+        assert!(!state.model_status()?.ready);
+        assert!(state
+            .model_status()?
+            .missing
+            .iter()
+            .any(|error| error.contains("模型清单无效")));
+        assert_eq!(state.search("敬礼", "keyword", None)?.len(), 1);
+        assert_eq!(state.search("敬礼", "hybrid", None)?.len(), 1);
+        assert!(state.search("敬礼", "semantic", None).is_err());
+        assert_eq!(state.import_paths(&paths, None)?.duplicates, 1);
+        let another = directory
+            .path()
+            .join(format!("导入-{}.png", manifest.len()));
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([manifest.len() as u8, 0, 0, 255]))
+            .save(&another)?;
+        assert_eq!(
+            state
+                .import_paths(&[another.to_string_lossy().into_owned()], None)?
+                .added,
+            1
+        );
+        state.save_settings(Settings {
+            copy_size: 320,
+            ..Default::default()
+        })?;
+        let library = state.library.lock().unwrap();
+        assert_eq!(library.snapshot()?.settings.copy_size, 320);
+        let asset = library.asset(&id)?;
+        assert_eq!(asset.index_state, "ready");
+        assert_eq!(library.embedding_version, "installed-model-fingerprint");
+        assert!(crate::media::prepare_copy(&asset, &root, 0, false)?.is_file());
+    }
+    Ok(())
+}
+
+#[test]
 fn vision_queue_pauses_retries_and_discards_cleared_inflight_results() -> Result<()> {
     use crate::test_support::{completion, server};
     use std::sync::mpsc;

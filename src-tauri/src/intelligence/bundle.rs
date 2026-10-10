@@ -176,6 +176,7 @@ mod tests {
             ..Default::default()
         };
         library.save_settings(settings.clone())?;
+        library.set_embedding_version(&super::super::model_version(&root, bundle.model)?)?;
         let image = temp.path().join("meme.png");
         image::RgbaImage::new(4, 4).save(&image)?;
         library.import_files(&[image.to_string_lossy().into_owned()], None);
@@ -197,10 +198,12 @@ mod tests {
             previous
         );
         library.save_settings(settings.clone())?;
+        library.set_embedding_version(&super::super::model_version(&root, bundle.model)?)?;
         assert_eq!(library.task_counts(TaskKind::Index)?.2, 1);
         fs::write(source.join("model.data"), "weights")?;
         import(&root, bundle.model, &manifest, &cancel, |_, _, _| {})?;
         library.save_settings(settings)?;
+        library.set_embedding_version(&super::super::model_version(&root, bundle.model)?)?;
         assert_eq!(library.task_counts(TaskKind::Index)?, (1, 0, 0, 1));
         assert!(library
             .search("meme", "semantic", None, Some(&[1.0, 0.0]))?

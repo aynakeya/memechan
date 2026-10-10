@@ -83,6 +83,10 @@ pub fn prepare_copy(
         .join("copies")
         .join(format!("{}-{}x{}-v1.{extension}", asset.id, width, height));
     if output.exists() {
+        File::options()
+            .write(true)
+            .open(&output)?
+            .set_modified(std::time::SystemTime::now())?;
         return Ok(output);
     }
     let temporary = output.with_extension("part");

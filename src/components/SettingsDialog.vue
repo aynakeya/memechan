@@ -13,7 +13,8 @@ import USwitch from '@nuxt/ui/components/Switch.vue'
 import UTabs from '@nuxt/ui/components/Tabs.vue'
 import { api } from '../api'
 import { errorMessage, useNotifications } from '../composables/useNotifications'
-import type { ModelStatus, Settings, VisionConfig, VisionStatus } from '../types'
+import { bytesLabel } from '../format'
+import type { CopyCacheUsage, ModelStatus, Settings, VisionConfig, VisionStatus } from '../types'
 const props = defineProps<{ settings: Settings; model: ModelStatus | null }>()
 const open = defineModel<boolean>('open', { required: true })
 const settingsTab = defineModel<string>('tab', { required: true })
@@ -22,6 +23,9 @@ const emit = defineEmits<{ saved: [settings: Settings]; refresh: [] }>()
 const draft = ref({ ...props.settings })
 const settingsSaving = ref(false)
 const importingModels = ref(false)
+const copyCache = ref<CopyCacheUsage | null>(null)
+const cacheBusy = ref(false)
+const cacheError = ref('')
 const notify = useNotifications()
 const visionConfig = ref<VisionConfig>({ baseUrl: '', model: '', autoDescribe: false, apiKey: '' })
 const showVisionKey = ref(false),
@@ -61,8 +65,34 @@ watch(open, (opened) => {
   if (opened) {
     draft.value = { ...props.settings }
     if (vision.value) visionConfig.value = { ...vision.value.config }
+    void refreshCopyCache()
   }
 })
+async function refreshCopyCache() {
+  if (cacheBusy.value) return
+  cacheBusy.value = true
+  cacheError.value = ''
+  try {
+    copyCache.value = await api.copyCache()
+  } catch (error) {
+    cacheError.value = errorMessage(error)
+  } finally {
+    cacheBusy.value = false
+  }
+}
+async function clearCopyCache() {
+  if (cacheBusy.value) return
+  cacheBusy.value = true
+  cacheError.value = ''
+  try {
+    copyCache.value = await api.clearCopyCache()
+    notify('已清理可回收缓存，受保护的文件已保留')
+  } catch (error) {
+    cacheError.value = errorMessage(error)
+  } finally {
+    cacheBusy.value = false
+  }
+}
 async function saveSettings() {
   if (settingsSaving.value) return
   settingsSaving.value = true
@@ -181,6 +211,48 @@ async function testVision() {
             @update:model-value="saveSettings()"
           />
         </UFormField>
+        <section aria-label="复制缓存" class="space-y-3 border-t border-default pt-5">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h3 class="text-sm font-medium">复制缓存</h3>
+              <p v-if="copyCache" class="mt-1 text-xs text-muted">
+                {{ bytesLabel(copyCache.bytes) }} · {{ copyCache.files }} 个文件 · 软上限
+                {{ copyCache.limitBytes / 1024 / 1024 }} MiB
+              </p>
+              <p v-else class="mt-1 text-xs text-muted">
+                {{ cacheBusy ? '正在读取占用…' : '无法读取占用' }}
+              </p>
+            </div>
+            <UButton
+              color="neutral"
+              variant="outline"
+              icon="i-lucide-eraser"
+              :loading="cacheBusy"
+              :disabled="!copyCache?.files"
+              @click="clearCopyCache()"
+            >
+              清理复制缓存
+            </UButton>
+          </div>
+          <p class="text-xs leading-relaxed text-muted">
+            自动回收旧副本；清理时保留当前剪贴板、最近一次复制及最近 10
+            分钟用过的文件，原图不受影响。
+          </p>
+          <p v-if="copyCache && copyCache.bytes > copyCache.limitBytes" class="text-xs text-muted">
+            当前占用超出软上限，未受保护的旧副本会自动回收。
+          </p>
+          <UAlert
+            v-if="cacheError || copyCache?.error"
+            role="alert"
+            color="warning"
+            variant="subtle"
+            title="无法完成缓存操作"
+            :description="cacheError || copyCache?.error || ''"
+            :actions="[
+              { label: '刷新', color: 'neutral', variant: 'outline', onClick: refreshCopyCache },
+            ]"
+          />
+        </section>
         <UAlert
           color="neutral"
           variant="subtle"

@@ -1,8 +1,11 @@
 pub mod app;
 #[cfg(feature = "desktop")]
 mod clipboard;
+#[cfg(any(feature = "desktop", test))]
+mod copy_cache;
 #[cfg(feature = "desktop")]
 pub mod desktop;
+mod import;
 pub mod intelligence;
 pub mod library;
 pub mod media;
