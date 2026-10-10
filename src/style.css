@@ -46,6 +46,7 @@
   display: flex;
   height: 100dvh;
   overflow: hidden;
+  isolation: isolate;
 }
 .sidebar {
   display: flex;
@@ -92,6 +93,23 @@
   gap: 16px;
   padding: 24px 0;
 }
+.library-heading h1 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-heading > div {
+  flex-shrink: 0;
+}
+.search-panel {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  flex-shrink: 0;
+  padding-block: 8px;
+  background: var(--ui-bg);
+}
 .search-options,
 .collection-toolbar {
   display: flex;
@@ -103,6 +121,7 @@
   flex-wrap: wrap;
 }
 .collection-toolbar {
+  flex-wrap: wrap;
   padding: 22px 0 16px;
 }
 .empty-state {
@@ -210,6 +229,22 @@
   border-left: 1px solid var(--ui-border);
   background: var(--ui-bg);
 }
+.details-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--ui-bg);
+}
+.details-page {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  border-left: 0;
+}
+.details-page .detail-preview {
+  height: min(32dvh, 220px);
+  aspect-ratio: auto;
+}
 .drop-overlay {
   position: fixed;
   inset: 0;
@@ -250,15 +285,62 @@
 }
 @media (max-width: 1120px) {
   .sidebar {
-    width: 188px;
+    width: 64px;
+    padding: 16px 8px;
+  }
+  .sidebar-label,
+  .sidebar-count,
+  .nav-label {
+    display: none;
+  }
+  .brand {
+    justify-content: center;
+    padding: 0;
+  }
+  .brand-mark {
+    width: 32px;
+    height: 32px;
+  }
+  .sidebar nav {
+    margin-top: 16px;
+  }
+  .sidebar nav[aria-label='资料库'] {
+    flex-shrink: 0;
+  }
+  .sidebar nav[aria-label='分组'] {
+    border-top: 1px solid var(--ui-border);
+    padding-top: 12px;
+  }
+  .sidebar nav > button,
+  .sidebar-footer > button {
+    min-height: 40px;
+    justify-content: center;
+    padding: 8px;
+  }
+  .sidebar-footer {
+    padding-top: 12px;
   }
   .main-content {
-    padding-inline: 20px;
+    padding-inline: 16px;
   }
-  .details-panel {
-    position: fixed;
-    inset: 0 0 0 auto;
-    z-index: 20;
-    box-shadow: -8px 0 30px #00000012;
+  .asset-grid {
+    grid-template-columns: repeat(auto-fill, minmax(144px, 1fr));
+    gap: 12px;
+  }
+}
+@media (max-width: 799px), (max-height: 600px) {
+  .library-heading {
+    padding-block: 16px;
+  }
+  .collection-toolbar {
+    padding-block: 12px;
+  }
+  .library-footer {
+    padding-block: 10px;
+  }
+}
+@media (max-height: 600px) {
+  .detail-preview {
+    max-height: 180px;
   }
 }

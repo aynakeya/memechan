@@ -4,6 +4,8 @@ target/
 src-tauri/gen/
 .local/
 /models/
+__pycache__/
+*.pyc
 *.log
 .DS_Store
 .env

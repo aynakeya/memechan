@@ -16,7 +16,14 @@ export default defineConfig({
     }),
   ],
   clearScreen: false,
-  server: { port: 1420, strictPort: true },
+  server: {
+    port: 1420,
+    strictPort: true,
+    watch: {
+      // Native code is watched by Tauri; models and tool environments are not frontend sources.
+      ignored: ['**/src-tauri/**', '**/vendor/**', '**/.local/**', '**/models/**'],
+    },
+  },
   envPrefix: ['VITE_', 'TAURI_ENV_*'],
   build: { target: 'es2022' },
 })

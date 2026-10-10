@@ -15,8 +15,8 @@
         "title": "Memechan · 表情资料库",
         "width": 1320,
         "height": 860,
-        "minWidth": 940,
-        "minHeight": 640
+        "minWidth": 640,
+        "minHeight": 480
       }
     ],
     "security": {

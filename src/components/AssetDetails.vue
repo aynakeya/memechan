@@ -9,6 +9,7 @@ import { fileUrl } from '../api'
 import { bytesLabel, sizeLabel, stateLabel } from '../format'
 import type { Asset, Group, ModelStatus } from '../types'
 defineProps<{
+  page: boolean
   asset: Asset
   groups: Group[]
   model: ModelStatus | null
@@ -36,10 +37,25 @@ const emit = defineEmits<{
 }>()
 </script>
 <template>
-  <aside class="details-panel" aria-label="表情详情">
-    <div class="flex items-center justify-between border-b border-default p-4">
+  <aside
+    class="details-panel outline-none"
+    :class="{ 'details-page': page }"
+    aria-label="表情详情"
+    tabindex="-1"
+  >
+    <div class="details-header flex items-center justify-between gap-3 border-b border-default p-4">
+      <UButton
+        v-if="page"
+        color="neutral"
+        variant="ghost"
+        icon="i-lucide-arrow-left"
+        @click="emit('close')"
+      >
+        返回列表
+      </UButton>
       <h2 class="text-sm font-semibold">表情详情</h2>
       <UButton
+        v-if="!page"
         color="neutral"
         variant="ghost"
         size="xs"

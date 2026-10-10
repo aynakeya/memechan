@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
 import type { ContextMenuItem } from '@nuxt/ui'
 import { errorMessage, useNotifications } from './composables/useNotifications'
 import { sizeLabel } from './format'
@@ -42,6 +42,7 @@ const settings = ref<Settings>({
 })
 const scope = ref<string>('all'),
   query = ref(''),
+  searchComposing = ref(false),
   searchMode = ref<SearchMode>('hybrid'),
   results = ref<Asset[] | null>(null)
 const loading = ref(false),
@@ -50,6 +51,10 @@ const loading = ref(false),
   copying = ref<string | null>(null)
 const selectedId = ref<string | null>(null),
   preview = ref<Asset | null>(null)
+const smallWindowMedia = window.matchMedia('(max-width: 799px)')
+const isSmallWindow = ref(smallWindowMedia.matches)
+const detailsOpen = ref(false)
+const mainContent = useTemplateRef<HTMLElement>('mainContent')
 const description = ref(''),
   descriptionSaved = ref(''),
   saving = ref(false)
@@ -100,6 +105,12 @@ const modalTitle = computed(() => {
   }[modal.value]
 })
 const selected = computed(() => assets.value.find((asset) => asset.id === selectedId.value))
+const showingDetailPage = computed(
+  () => isSmallWindow.value && detailsOpen.value && !!selected.value,
+)
+function windowSizeChanged(event: MediaQueryListEvent) {
+  isSmallWindow.value = event.matches
+}
 const activeGroup = computed(() =>
   groups.value.find((group) => `group:${group.id}` === scope.value),
 )
@@ -123,7 +134,8 @@ const visible = computed(() => {
   else if (groupId.value !== null)
     list = list.filter((asset) => asset.groups.includes(groupId.value!))
   if (onlyAnimated.value) list = list.filter((asset) => asset.animated)
-  if (!query.value.trim())
+  // Typing only changes the draft; recompute the grid when search results arrive.
+  if (results.value === null)
     list.sort((a, b) =>
       sort.value === 'name' ? a.name.localeCompare(b.name, 'zh-CN') : b.createdAt - a.createdAt,
     )
@@ -133,6 +145,7 @@ const sizes = [0, 128, 256, 512]
 let searchTimer: ReturnType<typeof setTimeout>,
   pollTimer: ReturnType<typeof setInterval>,
   searchSequence = 0
+let listScrollTop = 0
 let unlistenDrop: (() => void) | undefined
 let refreshingModels = false
 async function refresh() {
@@ -145,7 +158,7 @@ async function refresh() {
 }
 async function refreshLibrary() {
   await refresh()
-  if (query.value.trim()) await runSearch()
+  if (query.value.trim()) scheduleSearch()
 }
 async function refreshModels() {
   if (refreshingModels) return
@@ -194,17 +207,33 @@ async function runSearch() {
     if (sequence === searchSequence) searching.value = false
   }
 }
-watch([query, searchMode, scope], () => {
+function scheduleSearch() {
   ++searchSequence
   clearTimeout(searchTimer)
-  searchTimer = setTimeout(runSearch, 250)
+  searching.value = false
+  if (!searchComposing.value) searchTimer = setTimeout(runSearch, 350)
+}
+watch([query, searchMode, scope, searchComposing], scheduleSearch)
+watch(showingDetailPage, async (open) => {
+  const main = mainContent.value!
+  if (open) listScrollTop = main.scrollTop
+  else {
+    await nextTick()
+    main.scrollTop = listScrollTop
+  }
 })
-watch(selectedId, () => {
+watch(selectedId, (id) => {
+  if (!id) detailsOpen.value = false
   description.value = selected.value?.description ?? ''
   descriptionSaved.value = description.value
 })
 async function closeDetails() {
-  if (await saveDetails()) selectedId.value = null
+  if (!(await saveDetails())) return
+  detailsOpen.value = false
+  await nextTick()
+  mainContent.value
+    ?.querySelector<HTMLElement>('.asset-card.selected')
+    ?.focus({ preventScroll: true })
 }
 async function selectAsset(asset: Asset) {
   if (selectedId.value === asset.id) return
@@ -328,6 +357,13 @@ function assetMenu(asset: Asset): ContextMenuItem[][] {
 async function contextAction(asset: Asset, custom = false) {
   await selectAsset(asset)
   if (custom && selectedId.value === asset.id) modal.value = 'custom'
+  else if (!custom && selectedId.value === asset.id) {
+    detailsOpen.value = true
+    if (isSmallWindow.value) {
+      await nextTick()
+      document.querySelector<HTMLElement>('.details-panel')?.focus()
+    }
+  }
 }
 function openGroup(group: Group | null = null) {
   editingGroup.value = group
@@ -403,7 +439,7 @@ async function clearText() {
     clearing.value = false
   }
 }
-function keyboard(event: KeyboardEvent) {
+async function keyboard(event: KeyboardEvent) {
   if (
     event.defaultPrevented ||
     settingsOpen.value ||
@@ -416,7 +452,16 @@ function keyboard(event: KeyboardEvent) {
     return
   if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
     event.preventDefault()
+    if (showingDetailPage.value) {
+      await closeDetails()
+      if (showingDetailPage.value) return
+    }
     searchInput.value?.inputRef?.focus()
+    return
+  }
+  if (event.key === 'Escape' && showingDetailPage.value) {
+    event.preventDefault()
+    await closeDetails()
     return
   }
   if (
@@ -438,6 +483,7 @@ function keyboard(event: KeyboardEvent) {
   }
 }
 onMounted(async () => {
+  smallWindowMedia.addEventListener('change', windowSizeChanged)
   document.addEventListener('keydown', keyboard)
   if (!isDesktop) return
   loading.value = true
@@ -457,6 +503,7 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  smallWindowMedia.removeEventListener('change', windowSizeChanged)
   unlistenDrop?.()
   clearInterval(pollTimer)
   clearTimeout(searchTimer)
@@ -467,10 +514,12 @@ onBeforeUnmount(() => {
 <template>
   <UApp :locale="zh_cn" :toaster="{ position: 'bottom-right', duration: 3500 }">
     <div class="app-shell" @dragover.prevent @drop.prevent>
-      <aside class="sidebar">
+      <aside v-show="!showingDetailPage" class="sidebar">
         <a
           class="brand"
           href="#"
+          aria-label="Memechan · 全部表情"
+          title="Memechan · 全部表情"
           @click.prevent="
             () => {
               scope = 'all'
@@ -479,7 +528,7 @@ onBeforeUnmount(() => {
           "
         >
           <img class="brand-mark" src="/memechan-icon.png" alt="" width="40" height="40" />
-          <span>Memechan</span>
+          <span class="sidebar-label">Memechan</span>
         </a>
         <p class="nav-label">我的表情库</p>
         <nav class="space-y-1" aria-label="资料库">
@@ -489,10 +538,12 @@ onBeforeUnmount(() => {
             :color="scope === 'all' ? 'primary' : 'neutral'"
             :variant="scope === 'all' ? 'soft' : 'ghost'"
             icon="i-lucide-grid-2x2"
+            aria-label="全部表情"
+            title="全部表情"
             @click="scope = 'all'"
           >
-            全部表情
-            <UBadge class="ml-auto" color="neutral" variant="subtle" size="xs">
+            <span class="sidebar-label">全部表情</span>
+            <UBadge class="sidebar-count ml-auto" color="neutral" variant="subtle" size="xs">
               {{ assets.length }}
             </UBadge>
           </UButton>
@@ -502,10 +553,12 @@ onBeforeUnmount(() => {
             :color="scope === 'favorites' ? 'primary' : 'neutral'"
             :variant="scope === 'favorites' ? 'soft' : 'ghost'"
             icon="i-lucide-heart"
+            aria-label="我的收藏"
+            title="我的收藏"
             @click="scope = 'favorites'"
           >
-            我的收藏
-            <UBadge class="ml-auto" color="neutral" variant="subtle" size="xs">
+            <span class="sidebar-label">我的收藏</span>
+            <UBadge class="sidebar-count ml-auto" color="neutral" variant="subtle" size="xs">
               {{ favorites }}
             </UBadge>
           </UButton>
@@ -515,9 +568,11 @@ onBeforeUnmount(() => {
             :color="scope === 'recent' ? 'primary' : 'neutral'"
             :variant="scope === 'recent' ? 'soft' : 'ghost'"
             icon="i-lucide-clock"
+            aria-label="最近添加"
+            title="最近添加"
             @click="scope = 'recent'"
           >
-            最近添加
+            <span class="sidebar-label">最近添加</span>
           </UButton>
           <UButton
             block
@@ -525,10 +580,12 @@ onBeforeUnmount(() => {
             :color="scope === 'ungrouped' ? 'primary' : 'neutral'"
             :variant="scope === 'ungrouped' ? 'soft' : 'ghost'"
             icon="i-lucide-folder"
+            aria-label="未分组"
+            title="未分组"
             @click="scope = 'ungrouped'"
           >
-            未分组
-            <UBadge class="ml-auto" color="neutral" variant="subtle" size="xs">
+            <span class="sidebar-label">未分组</span>
+            <UBadge class="sidebar-count ml-auto" color="neutral" variant="subtle" size="xs">
               {{ ungrouped }}
             </UBadge>
           </UButton>
@@ -552,11 +609,13 @@ onBeforeUnmount(() => {
             class="justify-start"
             :color="groupId === group.id ? 'primary' : 'neutral'"
             :variant="groupId === group.id ? 'soft' : 'ghost'"
+            :aria-label="group.name"
+            :title="group.name"
             @click="scope = `group:${group.id}`"
           >
             <UIcon name="i-lucide-folder" class="size-4 shrink-0" :style="{ color: group.color }" />
-            <span class="truncate">{{ group.name }}</span>
-            <span class="ml-auto text-xs text-muted">{{ group.count }}</span>
+            <span class="sidebar-label truncate">{{ group.name }}</span>
+            <span class="sidebar-count ml-auto text-xs text-muted">{{ group.count }}</span>
           </UButton>
           <UButton
             block
@@ -564,21 +623,25 @@ onBeforeUnmount(() => {
             color="neutral"
             variant="ghost"
             icon="i-lucide-plus"
+            aria-label="新建分组"
+            title="新建分组"
             @click="openGroup()"
           >
-            新建分组
+            <span class="sidebar-label">新建分组</span>
           </UButton>
         </nav>
-        <div class="mt-auto space-y-1 pt-6">
+        <div class="sidebar-footer mt-auto shrink-0 space-y-1 pt-6">
           <UButton
             block
             class="justify-start"
             color="neutral"
             variant="ghost"
             icon="i-lucide-list-todo"
+            aria-label="任务管理"
+            title="任务管理"
             @click="openTasks()"
           >
-            任务管理
+            <span class="sidebar-label">任务管理</span>
           </UButton>
           <UButton
             block
@@ -586,14 +649,16 @@ onBeforeUnmount(() => {
             color="neutral"
             variant="ghost"
             icon="i-lucide-settings"
+            aria-label="偏好设置"
+            title="偏好设置"
             @click="openSettings()"
           >
-            偏好设置
+            <span class="sidebar-label">偏好设置</span>
           </UButton>
         </div>
       </aside>
 
-      <main class="main-content">
+      <main v-show="!showingDetailPage" ref="mainContent" class="main-content">
         <UAlert
           v-if="!isDesktop"
           class="mt-5"
@@ -629,7 +694,7 @@ onBeforeUnmount(() => {
           </div>
         </header>
 
-        <section class="space-y-3" aria-label="搜索">
+        <section class="search-panel space-y-3" aria-label="搜索">
           <UInput
             ref="searchInput"
             v-model="query"
@@ -640,6 +705,8 @@ onBeforeUnmount(() => {
             aria-label="搜索表情"
             placeholder="搜索文字或描述"
             :ui="{ trailing: 'pr-2' }"
+            @compositionstart="searchComposing = true"
+            @compositionend="searchComposing = false"
           >
             <template #trailing>
               <UButton
@@ -655,7 +722,9 @@ onBeforeUnmount(() => {
             </template>
           </UInput>
           <div class="search-options">
+            <!-- Measure the tab indicator only while the list page is visible. -->
             <UTabs
+              v-if="!showingDetailPage"
               v-model="searchMode"
               :items="searchTabs"
               :content="false"
@@ -697,7 +766,7 @@ onBeforeUnmount(() => {
             </UButton>
             <span v-if="query && searchMode === 'hybrid' && !model?.ready">当前使用关键词匹配</span>
           </div>
-          <div class="flex shrink-0 items-center gap-2">
+          <div class="flex flex-wrap items-center gap-2">
             <UButton
               size="sm"
               :color="onlyAnimated ? 'primary' : 'neutral'"
@@ -726,6 +795,17 @@ onBeforeUnmount(() => {
               :aria-pressed="compact"
               @click="compact = !compact"
             />
+            <UButton
+              size="sm"
+              :color="detailsOpen ? 'primary' : 'neutral'"
+              :variant="detailsOpen ? 'soft' : 'outline'"
+              icon="i-lucide-panel-right"
+              :aria-pressed="detailsOpen"
+              :disabled="!selected"
+              @click="selected && (detailsOpen ? closeDetails() : contextAction(selected))"
+            >
+              详情
+            </UButton>
           </div>
         </div>
         <UAlert
@@ -812,8 +892,9 @@ onBeforeUnmount(() => {
       </main>
 
       <AssetDetails
-        v-if="selected"
+        v-if="selected && detailsOpen"
         v-model="description"
+        :page="isSmallWindow"
         :asset="selected"
         :groups="groups"
         :model="model"
@@ -857,9 +938,12 @@ onBeforeUnmount(() => {
           : undefined
       "
       :close="{ 'aria-label': '关闭预览' }"
+      :fullscreen="isSmallWindow"
       :ui="{
-        content: 'max-w-4xl',
-        body: 'flex items-center justify-center bg-muted min-h-48',
+        content: isSmallWindow ? 'h-dvh max-w-none' : 'h-[calc(100dvh-4rem)] max-w-4xl',
+        wrapper: 'min-w-0 flex-1 pr-8',
+        description: 'truncate',
+        body: 'flex min-h-0 items-center justify-center overflow-hidden bg-muted p-2 sm:p-4',
         footer: 'justify-end',
       }"
       @update:open="
@@ -873,7 +957,7 @@ onBeforeUnmount(() => {
           v-if="preview"
           :src="fileUrl(preview.path)"
           :alt="preview.name"
-          class="max-h-[65vh] max-w-full object-contain"
+          class="h-full w-full min-h-0 object-contain"
         />
       </template>
       <template #footer>

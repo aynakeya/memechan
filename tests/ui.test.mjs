@@ -50,11 +50,27 @@ function desktopTest(name, run) {
   })
 }
 
-desktopTest('编辑描述、复制尺寸、预览及搜索错误恢复', async (page) => {
+desktopTest('详情开关、编辑描述、复制尺寸、预览及搜索错误恢复', async (page) => {
   const asset = page.getByRole('article', { name: '正在认真摸鱼', exact: true })
+  const details = page.getByRole('button', { name: '详情', exact: true })
+  assert.equal(await details.isDisabled(), true)
+  await asset.click()
+  assert.equal(await page.locator('.details-panel').count(), 0)
+  await details.click()
+  assert.equal(await details.getAttribute('aria-pressed'), 'true')
+  await page.getByRole('article', { name: '谢谢老板', exact: true }).click()
+  await page.locator('.details-panel').getByRole('heading', { name: '谢谢老板' }).waitFor()
   await asset.click()
   await page.getByLabel('我的描述').fill('周一不想上班')
-  await page.getByRole('button', { name: '保存描述', exact: true }).click()
+  await details.click()
+  await page.locator('.details-panel').waitFor({ state: 'hidden' })
+  assert.equal(
+    await page.locator('.asset-card.selected').getAttribute('aria-label'),
+    '正在认真摸鱼',
+  )
+  assert.equal(await details.getAttribute('aria-pressed'), 'false')
+  await details.click()
+  assert.equal(await page.getByLabel('我的描述').inputValue(), '周一不想上班')
   await page.getByRole('button', { name: '已保存', exact: true }).waitFor()
   await page.evaluate(() => {
     window.testHoldSave = true
@@ -84,11 +100,17 @@ desktopTest('编辑描述、复制尺寸、预览及搜索错误恢复', async (
     ),
   )
   await page.getByRole('button', { name: '关闭详情' }).click()
+  assert.equal(
+    await page.locator('.asset-card.selected').getAttribute('aria-label'),
+    '正在认真摸鱼',
+  )
   await page.locator('.asset-card').first().focus()
+  assert.equal(await page.locator('.details-panel').count(), 0)
   await page.keyboard.press('Space')
   await page.getByRole('dialog', { name: '原图预览', exact: true }).waitFor()
   await page.keyboard.press('Escape')
   await page.getByRole('dialog', { name: '原图预览', exact: true }).waitFor({ state: 'hidden' })
+  assert.equal(await page.locator('.details-panel').count(), 0)
   await page.getByRole('button', { name: '只看动图' }).click()
   assert.equal(await page.locator('.asset-card').count(), 1)
   await page.getByRole('button', { name: '只看动图' }).click()
@@ -97,6 +119,10 @@ desktopTest('编辑描述、复制尺寸、预览及搜索错误恢复', async (
   await page.getByRole('button', { name: '保存', exact: true }).click()
   await page.getByRole('button', { name: '关闭弹窗' }).click()
   await page.locator('.asset-card').first().dblclick()
+  await page.waitForFunction(() =>
+    window.testCalls.some((call) => call.command === 'copy_asset' && call.args.size === null),
+  )
+  assert.equal(await page.locator('.details-panel').count(), 0)
   assert.ok(
     await page.evaluate(() =>
       window.testCalls.some(
@@ -109,10 +135,131 @@ desktopTest('编辑描述、复制尺寸、预览及搜索错误恢复', async (
     await page.getByLabel('搜索表情').evaluate((input) => document.activeElement === input),
     true,
   )
-  await page.getByLabel('搜索表情').fill('不想上班')
+  const search = page.getByLabel('搜索表情')
+  await search.fill('bu')
+  await search.evaluate((input) => {
+    input.dispatchEvent(new window.CompositionEvent('compositionstart', { bubbles: true }))
+    input.value = 'bu xiang'
+    input.dispatchEvent(new window.InputEvent('input', { bubbles: true, isComposing: true }))
+    // A task refresh must not trigger a search for unfinished composition either.
+    window.testModel.job.done++
+  })
+  await page.waitForTimeout(2000)
+  assert.deepEqual(
+    await page.evaluate(() => window.testCalls.filter((call) => call.command === 'search')),
+    [],
+  )
+  await search.evaluate((input) => {
+    input.value = '不想上班'
+    input.dispatchEvent(
+      new window.CompositionEvent('compositionend', { bubbles: true, data: input.value }),
+    )
+    input.dispatchEvent(new window.InputEvent('input', { bubbles: true, isComposing: false }))
+  })
   await page.getByRole('alert').filter({ hasText: '本地模型未就绪' }).waitFor()
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.testCalls.filter((call) => call.command === 'search').map((call) => call.args.query),
+    ),
+    ['不想上班'],
+  )
   await page.getByRole('button', { name: '清空搜索' }).click()
   await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 6)
+})
+
+desktopTest('窗口切换保留草稿与列表位置，预览不被详情遮挡', async (page) => {
+  await page.getByRole('article', { name: '正在认真摸鱼', exact: true }).click()
+  await page.getByRole('button', { name: '详情', exact: true }).click()
+  const description = page.getByLabel('我的描述')
+  await description.fill('缩放窗口时保留的草稿')
+  for (const width of [940, 800]) {
+    await page.setViewportSize({ width, height: 600 })
+    const layout = await page.evaluate(() => {
+      const main = document.querySelector('main')
+      return {
+        mainRight: main.getBoundingClientRect().right,
+        detailsLeft: document.querySelector('.details-panel').getBoundingClientRect().left,
+        overflow: main.scrollWidth > main.clientWidth,
+      }
+    })
+    assert.ok(layout.mainRight <= layout.detailsLeft)
+    assert.equal(layout.overflow, false)
+  }
+  await page.getByRole('button', { name: '放大预览' }).click()
+  const preview = page.getByRole('dialog', { name: '原图预览', exact: true })
+  await preview.waitFor()
+  // The dialog must receive pointer events even over the details column.
+  assert.equal(
+    await preview.evaluate((dialog) => {
+      const bounds = dialog.getBoundingClientRect()
+      return dialog.contains(document.elementFromPoint(bounds.right - 30, bounds.top + 120))
+    }),
+    true,
+  )
+  await page.getByRole('button', { name: '关闭预览' }).click()
+  await preview.waitFor({ state: 'hidden' })
+  await page.setViewportSize({ width: 640, height: 480 })
+  const back = page.getByRole('button', { name: '返回列表' })
+  await back.waitFor()
+  assert.equal(await page.locator('main').isVisible(), false)
+  assert.equal(await description.inputValue(), '缩放窗口时保留的草稿')
+  await page.getByRole('button', { name: '放大预览' }).click()
+  await preview.waitFor()
+  assert.equal(
+    await preview.evaluate((dialog) => {
+      const bounds = dialog.getBoundingClientRect()
+      return (
+        bounds.width <= window.innerWidth &&
+        bounds.height <= window.innerHeight &&
+        dialog.scrollHeight <= dialog.clientHeight
+      )
+    }),
+    true,
+  )
+  await page.keyboard.press('Escape')
+  await preview.waitFor({ state: 'hidden' })
+  assert.equal(await back.isVisible(), true)
+  await back.click()
+  await page.locator('main').waitFor()
+  assert.ok(
+    await page.evaluate(() =>
+      window.testCalls.some(
+        (call) => call.command === 'save_asset' && call.args.description === '缩放窗口时保留的草稿',
+      ),
+    ),
+  )
+  await page.getByRole('tab', { name: '关键词', exact: true }).click()
+  const last = page.locator('.asset-card').last()
+  await last.dblclick()
+  assert.equal(await page.locator('.details-panel').count(), 0)
+  await page.waitForFunction(() => window.testCalls.some((call) => call.command === 'copy_asset'))
+  const scrollTop = await page.locator('main').evaluate((main) => main.scrollTop)
+  assert.ok(scrollTop > 0)
+  await last.click({ button: 'right' })
+  await page.getByRole('menuitem', { name: '编辑描述与分组' }).click()
+  await back.waitFor()
+  await back.click()
+  await page.locator('main').waitFor()
+  assert.equal(await page.locator('main').evaluate((main) => main.scrollTop), scrollTop)
+  assert.equal(
+    await page.getByRole('tab', { name: '关键词', exact: true }).getAttribute('aria-selected'),
+    'true',
+  )
+  await page.keyboard.press('Control+k')
+  await page.getByRole('button', { name: '详情', exact: true }).click()
+  await back.waitFor()
+  await description.fill('从小窗返回宽窗的草稿')
+  await page.setViewportSize({ width: 1320, height: 860 })
+  await page.getByRole('button', { name: '关闭详情' }).waitFor()
+  assert.equal(await description.inputValue(), '从小窗返回宽窗的草稿')
+  assert.equal(await page.locator('main').isVisible(), true)
+  await page.getByRole('button', { name: '关闭详情' }).click()
+  await page.setViewportSize({ width: 640, height: 480 })
+  await page.getByRole('article', { name: '正在认真摸鱼', exact: true }).click()
+  assert.equal(await page.locator('.details-panel').count(), 0)
+  await page.setViewportSize({ width: 1320, height: 860 })
+  await page.getByRole('article', { name: '谢谢老板', exact: true }).click()
+  assert.equal(await page.locator('.details-panel').count(), 0)
 })
 
 desktopTest('设置草稿、本地模型与图片理解配置', async (page) => {
@@ -212,6 +359,7 @@ desktopTest('设置草稿、本地模型与图片理解配置', async (page) => 
   await task.getByText('已暂停', { exact: true }).waitFor()
   await page.getByRole('button', { name: '关闭任务管理' }).click()
   await page.getByRole('article', { name: '正在认真摸鱼', exact: true }).click()
+  await page.getByRole('button', { name: '详情', exact: true }).click()
   await page.getByRole('button', { name: '通过 API 生成描述', exact: true }).click()
   await page.getByText('女孩举手敬礼，表示收到。', { exact: true }).waitFor()
   assert.equal(await page.getByLabel('我的描述').inputValue(), '假装忙碌，其实想下班')
@@ -278,10 +426,11 @@ desktopTest('停用 OCR、独立控制任务与清除整个资料库的文字', 
   await vision.getByRole('button', { name: '清除全部图片描述', exact: true }).click()
   await page.getByRole('button', { name: '确认清除', exact: true }).click()
   await page.getByRole('button', { name: '关闭任务管理', exact: true }).click()
-  for (const name of ['今天也要开心', '正在认真摸鱼']) {
-    await page.getByRole('article', { name, exact: true }).click()
-    await page.getByText('文字已清除，可重新识别。', { exact: true }).waitFor()
-  }
+  await page.getByRole('article', { name: '今天也要开心', exact: true }).click()
+  await page.getByRole('button', { name: '详情', exact: true }).click()
+  await page.getByText('文字已清除，可重新识别。', { exact: true }).waitFor()
+  await page.getByRole('article', { name: '正在认真摸鱼', exact: true }).click()
+  await page.getByText('文字已清除，可重新识别。', { exact: true }).waitFor()
   assert.equal(await page.getByLabel('我的描述').inputValue(), '假装忙碌，其实想下班')
   assert.deepEqual(
     await page.evaluate(() =>
@@ -323,6 +472,7 @@ desktopTest('批量导入逐张可见且不阻塞浏览', async (page) => {
     'finished items appear before the whole import completes',
   )
   await page.locator('.asset-card').first().click()
+  await page.getByRole('button', { name: '详情', exact: true }).click()
   await page.getByLabel('我的描述').waitFor()
   await page.evaluate(() => window.testResumeImport())
   await page.getByText('已添加 3 张表情', { exact: true }).waitFor()
