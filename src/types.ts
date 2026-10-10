@@ -31,6 +31,7 @@ export interface Settings {
   copySize: number
   allowUpscale: boolean
   autoIndex: boolean
+  ocrEnabled: boolean
 }
 export interface Snapshot {
   assets: Asset[]
@@ -39,6 +40,11 @@ export interface Snapshot {
 }
 export interface JobStatus {
   running: boolean
+  paused: boolean
+  pending: number
+  failed: number
+  completed: number
+  incomplete: number
   done: number
   total: number
   message: string
@@ -46,21 +52,25 @@ export interface JobStatus {
 }
 export interface ModelStatus {
   ready: boolean
+  ocrReady: boolean
+  ocrEnabled: boolean
   directory: string
   missing: string[]
   job: JobStatus
   import: JobStatus
+  ocr: JobStatus
+  index: JobStatus
   vision: JobStatus
 }
 export interface VisionConfig {
   baseUrl: string
   model: string
   autoDescribe: boolean
+  apiKey: string
 }
 export interface VisionStatus {
   config: VisionConfig
   active: boolean
-  hasApiKey: boolean
 }
 export interface ImportReport {
   added: number
@@ -68,3 +78,6 @@ export interface ImportReport {
   errors: string[]
 }
 export type SearchMode = 'hybrid' | 'keyword' | 'semantic'
+export type TaskKind = 'ocr' | 'index' | 'vision'
+export type TaskAction = 'pause' | 'resume' | 'retry' | 'generate'
+export type ClearKind = TaskKind

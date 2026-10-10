@@ -1,7 +1,7 @@
 use crate::{
-    app::{AppState, ModelInstall, ModelStatus, VisionStatus},
+    app::{AppState, ModelStatus, TaskAction, VisionStatus},
     clipboard::ClipboardState,
-    library::{Asset, Group, ImportReport, Settings, Snapshot},
+    library::{Asset, Group, ImportReport, Settings, Snapshot, TaskKind},
     vision::{Description, VisionConfig},
     Result,
 };
@@ -107,11 +107,7 @@ async fn delete_group(state: State<'_, Arc<AppState>>, id: i64) -> CommandResult
 #[tauri::command]
 async fn save_settings(state: State<'_, Arc<AppState>>, settings: Settings) -> CommandResult<()> {
     let state = Arc::clone(state.inner());
-    blocking(move || {
-        state.library.lock().unwrap().save_settings(settings)?;
-        state.auto_index()
-    })
-    .await
+    blocking(move || state.save_settings(settings)).await
 }
 #[tauri::command]
 async fn copy_asset(
@@ -137,8 +133,9 @@ async fn copy_asset(
 }
 
 #[tauri::command]
-fn model_status(state: State<'_, Arc<AppState>>) -> ModelStatus {
-    state.model_status()
+async fn model_status(state: State<'_, Arc<AppState>>) -> CommandResult<ModelStatus> {
+    let state = Arc::clone(state.inner());
+    blocking(move || state.model_status()).await
 }
 #[tauri::command]
 async fn vision_status(state: State<'_, Arc<AppState>>) -> CommandResult<VisionStatus> {
@@ -149,10 +146,9 @@ async fn vision_status(state: State<'_, Arc<AppState>>) -> CommandResult<VisionS
 async fn save_vision_config(
     state: State<'_, Arc<AppState>>,
     config: VisionConfig,
-    api_key: Option<String>,
 ) -> CommandResult<()> {
     let state = Arc::clone(state.inner());
-    blocking(move || state.save_vision_config(config, api_key)).await
+    blocking(move || state.save_vision_config(config)).await
 }
 #[tauri::command]
 async fn test_vision(state: State<'_, Arc<AppState>>) -> CommandResult<Description> {
@@ -160,19 +156,23 @@ async fn test_vision(state: State<'_, Arc<AppState>>) -> CommandResult<Descripti
     blocking(move || state.test_vision()).await
 }
 #[tauri::command]
-async fn start_vision(state: State<'_, Arc<AppState>>, id: Option<String>) -> CommandResult<()> {
+async fn control_task(
+    state: State<'_, Arc<AppState>>,
+    kind: TaskKind,
+    action: TaskAction,
+    id: Option<String>,
+) -> CommandResult<()> {
     let state = Arc::clone(state.inner());
-    blocking(move || state.start_vision(id.as_deref(), true)).await
+    blocking(move || state.control_task(kind, action, id.as_deref())).await
 }
 #[tauri::command]
-fn pause_vision(state: State<'_, Arc<AppState>>) {
-    state.pause_vision();
-}
-#[tauri::command]
-fn install_models(state: State<'_, Arc<AppState>>) -> CommandResult<()> {
-    state
-        .start_job(Some(ModelInstall::Download), None, true)
-        .map_err(|e| e.to_string())
+async fn clear_text(
+    state: State<'_, Arc<AppState>>,
+    kind: TaskKind,
+    id: Option<String>,
+) -> CommandResult<usize> {
+    let state = Arc::clone(state.inner());
+    blocking(move || state.clear_text(kind, id.as_deref())).await
 }
 #[tauri::command]
 async fn import_models(
@@ -194,18 +194,14 @@ async fn import_models(
             .into_iter()
             .map(|file| file.into_path())
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        state.start_job(Some(ModelInstall::Local(paths)), None, true)?;
+        state.start_install(paths)?;
         Ok(true)
     })
     .await
 }
 #[tauri::command]
-fn start_index(state: State<'_, Arc<AppState>>, id: Option<String>) -> CommandResult<()> {
-    state.start_job(None, id, true).map_err(|e| e.to_string())
-}
-#[tauri::command]
-fn pause_index(state: State<'_, Arc<AppState>>) {
-    state.pause_index();
+fn pause_install(state: State<'_, Arc<AppState>>) {
+    state.pause_install();
 }
 
 pub fn run() {
@@ -235,15 +231,13 @@ pub fn run() {
             save_settings,
             copy_asset,
             model_status,
-            install_models,
             import_models,
-            start_index,
-            pause_index,
+            control_task,
+            clear_text,
+            pause_install,
             vision_status,
             save_vision_config,
-            test_vision,
-            start_vision,
-            pause_vision
+            test_vision
         ])
         .run(tauri::generate_context!())
         .expect("无法启动 Memechan");

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from
 import type { ContextMenuItem } from '@nuxt/ui'
 import { errorMessage, useNotifications } from './composables/useNotifications'
 import { sizeLabel } from './format'
+import TaskManager from './components/TaskManager.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import AssetDetails from './components/AssetDetails.vue'
 import AssetGrid from './components/AssetGrid.vue'
@@ -19,11 +20,25 @@ import UModal from '@nuxt/ui/components/Modal.vue'
 import USelect from '@nuxt/ui/components/Select.vue'
 import UTabs from '@nuxt/ui/components/Tabs.vue'
 import { api, fileUrl, isDesktop } from './api'
-import type { Asset, Group, ModelStatus, SearchMode, Settings, VisionStatus } from './types'
+import type {
+  Asset,
+  Group,
+  ModelStatus,
+  SearchMode,
+  Settings,
+  VisionStatus,
+  TaskKind,
+  ClearKind,
+} from './types'
 
 const assets = ref<Asset[]>([]),
   groups = ref<Group[]>([])
-const settings = ref<Settings>({ copySize: 0, allowUpscale: false, autoIndex: true })
+const settings = ref<Settings>({
+  copySize: 0,
+  allowUpscale: false,
+  autoIndex: true,
+  ocrEnabled: true,
+})
 const scope = ref<string>('all'),
   query = ref(''),
   searchMode = ref<SearchMode>('hybrid'),
@@ -47,6 +62,16 @@ const groupName = ref(''),
   groupColor = ref('#88966d'),
   editingGroup = ref<Group | null>(null)
 const settingsOpen = ref(false)
+const tasksOpen = ref(false)
+const clearTarget = ref<{ kind: ClearKind; id: string | null } | null>(null)
+const clearing = ref(false)
+const clearTitle = computed(() =>
+  clearTarget.value
+    ? '清除' +
+      (clearTarget.value.id ? '这张图片的' : '全部') +
+      { ocr: ' OCR 文字？', vision: '图片描述？', index: '文字向量索引？' }[clearTarget.value.kind]
+    : '',
+)
 const settingsTab = ref('general'),
   customSize = ref(320),
   menuOpen = ref(false)
@@ -128,13 +153,13 @@ async function refreshModels() {
     const previous = model.value
     model.value = await api.models()
     if (previous) {
-      const changed = (['job', 'import', 'vision'] as const).some(
+      const changed = (['job', 'import', 'ocr', 'index', 'vision'] as const).some(
         (key) =>
           previous[key].done !== model.value![key].done ||
           previous[key].running !== model.value![key].running,
       )
       if (changed) await refreshLibrary()
-      for (const key of ['job', 'vision'] as const) {
+      for (const key of ['job', 'ocr', 'index', 'vision'] as const) {
         const after = model.value[key]
         if (previous[key].running && !after.running && after.error) notify(after.error, true)
       }
@@ -343,31 +368,46 @@ async function removeAsset() {
     notify(errorMessage(error), true)
   }
 }
-async function startIndex(id: string | null = null) {
+async function generate(kind: TaskKind, id: string) {
   try {
-    await api.index(id)
+    await api.task(kind, 'generate', id)
+    await refreshLibrary()
     await refreshModels()
   } catch (error) {
     notify(errorMessage(error), true)
   }
 }
 function openSettings(tab = 'general') {
+  tasksOpen.value = false
   settingsTab.value = tab
   settingsOpen.value = true
 }
-async function describe(id: string | null = null) {
+function openTasks() {
+  settingsOpen.value = false
+  tasksOpen.value = true
+  void refreshModels()
+}
+async function clearText() {
+  if (!clearTarget.value || clearing.value) return
+  clearing.value = true
   try {
-    await api.describe(id)
-    await refresh()
+    await api.clearText(clearTarget.value.kind, clearTarget.value.id)
+    clearTarget.value = null
+    await refreshLibrary()
     await refreshModels()
+    notify('已清除')
   } catch (error) {
     notify(errorMessage(error), true)
+  } finally {
+    clearing.value = false
   }
 }
 function keyboard(event: KeyboardEvent) {
   if (
     event.defaultPrevented ||
     settingsOpen.value ||
+    tasksOpen.value ||
+    clearTarget.value ||
     modal.value ||
     preview.value ||
     menuOpen.value
@@ -528,7 +568,17 @@ onBeforeUnmount(() => {
             新建分组
           </UButton>
         </nav>
-        <div class="mt-auto pt-6">
+        <div class="mt-auto space-y-1 pt-6">
+          <UButton
+            block
+            class="justify-start"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-list-todo"
+            @click="openTasks()"
+          >
+            任务管理
+          </UButton>
           <UButton
             block
             class="justify-start"
@@ -623,7 +673,7 @@ onBeforeUnmount(() => {
             </UButton>
             <span v-else class="flex items-center gap-1.5 text-xs text-muted">
               <span class="size-1.5 rounded-full bg-primary"></span>
-              本地模型已就绪
+              语义模型已就绪
             </span>
           </div>
         </section>
@@ -636,22 +686,13 @@ onBeforeUnmount(() => {
               导入 {{ model.import.done }} / {{ model.import.total }}
             </span>
             <UButton
-              v-if="model?.job.running"
+              v-if="model?.ocr.running || model?.index.running || model?.vision.running"
               size="xs"
               variant="link"
               color="neutral"
-              @click="openSettings('models')"
+              @click="openTasks()"
             >
-              后台处理 {{ model.job.done }} / {{ model.job.total }}
-            </UButton>
-            <UButton
-              v-if="model?.vision.running"
-              size="xs"
-              variant="link"
-              color="neutral"
-              @click="openSettings('vision')"
-            >
-              图片理解 {{ model.vision.done }} / {{ model.vision.total }}
+              后台任务处理中
             </UButton>
             <span v-if="query && searchMode === 'hybrid' && !model?.ready">当前使用关键词匹配</span>
           </div>
@@ -785,8 +826,10 @@ onBeforeUnmount(() => {
         @copy="copy(selected)"
         @favorite="favorite(selected)"
         @save="saveDetails()"
-        @index="startIndex(selected.id)"
-        @describe="describe(selected.id)"
+        @index="generate('index', selected.id)"
+        @ocr="generate('ocr', selected.id)"
+        @clear="clearTarget = { kind: $event, id: selected.id }"
+        @describe="generate('vision', selected.id)"
         @settings="openSettings($event)"
         @create-group="openGroup()"
         @toggle-group="toggleGroup($event)"
@@ -844,17 +887,53 @@ onBeforeUnmount(() => {
       </template>
     </UModal>
 
+    <TaskManager
+      v-model:open="tasksOpen"
+      :model="model"
+      :vision-active="!!vision?.active"
+      :asset-count="assets.length"
+      @refresh="refreshModels()"
+      @settings="openSettings($event)"
+      @clear="clearTarget = { kind: $event, id: null }"
+    />
+    <UModal
+      :open="!!clearTarget"
+      :title="clearTitle"
+      :dismissible="!clearing"
+      :close="!clearing"
+      :ui="{ content: 'max-w-md', footer: 'justify-end' }"
+      @update:open="
+        (open) => {
+          if (!open) clearTarget = null
+        }
+      "
+    >
+      <template #body>
+        <p v-if="clearTarget?.kind === 'index'" class="text-sm text-muted">
+          仅删除文字向量索引，保留原图、OCR
+          文字和所有描述。清除后暂停这些图片的自动索引，需在任务管理中点击“建立缺失索引”重建；关键词搜索仍可使用。
+        </p>
+        <p v-else class="text-sm text-muted">
+          仅清除{{
+            clearTarget?.kind === 'ocr' ? '本地 OCR 文字' : 'API 生成的图片描述'
+          }}，保留原图与手写描述。相关索引将更新，已清除内容不会自动重新生成。
+        </p>
+      </template>
+      <template #footer>
+        <UButton color="neutral" variant="outline" :disabled="clearing" @click="clearTarget = null">
+          取消
+        </UButton>
+        <UButton color="error" :loading="clearing" @click="clearText()">确认清除</UButton>
+      </template>
+    </UModal>
     <SettingsDialog
       v-model:open="settingsOpen"
       v-model:tab="settingsTab"
       v-model:vision="vision"
       :settings="settings"
       :model="model"
-      :asset-count="assets.length"
       @saved="settings = $event"
       @refresh="refreshModels()"
-      @index="startIndex()"
-      @describe="describe()"
     />
     <UModal
       :open="!!modal"

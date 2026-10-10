@@ -1,10 +1,10 @@
 use crate::{
     intelligence::{self, Intelligence},
-    library::{Asset, ImportReport, Library},
+    library::{Asset, ImportReport, Library, Settings, TaskKind},
     vision::{Description, VisionClient, VisionConfig},
     Result,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -17,88 +17,435 @@ pub struct AppState {
     pub(crate) library: Mutex<Library>,
     models: PathBuf,
     intelligence: Mutex<Option<Intelligence>>,
+    local: Mutex<LocalTasks>,
     job: Mutex<JobStatus>,
     import_job: Mutex<JobStatus>,
     cancel: AtomicBool,
     vision: Mutex<VisionSession>,
 }
 #[derive(Default)]
+struct LocalTasks {
+    worker_running: bool,
+    ocr: JobStatus,
+    index: JobStatus,
+    index_only: Option<String>,
+}
+impl LocalTasks {
+    fn job(&mut self, kind: TaskKind) -> &mut JobStatus {
+        match kind {
+            TaskKind::Ocr => &mut self.ocr,
+            TaskKind::Index => &mut self.index,
+            TaskKind::Vision => unreachable!("vision uses its own HTTP queue"),
+        }
+    }
+}
+#[derive(Default)]
 struct VisionSession {
     client: Option<VisionClient>,
     job: JobStatus,
-    paused: bool,
 }
-#[derive(serde::Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VisionStatus {
     config: VisionConfig,
     active: bool,
-    has_api_key: bool,
 }
 #[derive(Clone, Default, Serialize)]
 pub struct JobStatus {
     pub running: bool,
+    pub paused: bool,
     pub done: usize,
     pub total: usize,
+    pub pending: usize,
+    pub failed: usize,
+    pub completed: usize,
+    pub incomplete: usize,
     pub message: String,
     pub error: Option<String>,
 }
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelStatus {
     pub ready: bool,
+    pub ocr_ready: bool,
+    pub ocr_enabled: bool,
     pub directory: String,
     pub missing: Vec<String>,
     pub job: JobStatus,
     pub import: JobStatus,
+    pub ocr: JobStatus,
+    pub index: JobStatus,
     pub vision: JobStatus,
 }
-
-pub enum ModelInstall {
-    Download,
-    Local(Vec<PathBuf>),
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskAction {
+    Pause,
+    Resume,
+    Retry,
+    Generate,
 }
+
 impl AppState {
     pub fn new(root: &Path) -> Result<Self> {
+        let library = Library::open(root)?;
+        let client = library
+            .vision_config()?
+            .map(VisionClient::new)
+            .transpose()?;
         Ok(Self {
-            library: Mutex::new(Library::open(root)?),
+            library: Mutex::new(library),
             models: root.join("models"),
             intelligence: Mutex::new(None),
+            local: Mutex::new(LocalTasks::default()),
             job: Mutex::new(JobStatus::default()),
             import_job: Mutex::new(JobStatus::default()),
             cancel: AtomicBool::new(false),
-            vision: Mutex::new(VisionSession::default()),
+            vision: Mutex::new(VisionSession {
+                client,
+                ..Default::default()
+            }),
         })
     }
-    pub fn start_vision(self: &Arc<Self>, id: Option<&str>, explicit: bool) -> Result<()> {
+    fn with_models<T>(&self, work: impl FnOnce(&mut Intelligence) -> Result<T>) -> Result<T> {
+        let mut models = self.intelligence.lock().unwrap();
+        if models.is_none() {
+            *models = Some(Intelligence::load(&self.models)?);
+        }
+        work(models.as_mut().unwrap())
+    }
+    pub fn save_settings(self: &Arc<Self>, settings: Settings) -> Result<()> {
+        self.library.lock().unwrap().save_settings(settings)?;
+        self.auto_index()
+    }
+    pub fn clear_text(self: &Arc<Self>, kind: TaskKind, id: Option<&str>) -> Result<usize> {
+        let changed = self.library.lock().unwrap().clear_text(kind, id)?;
+        self.auto_index()?;
+        Ok(changed)
+    }
+    pub fn control_task(
+        self: &Arc<Self>,
+        kind: TaskKind,
+        action: TaskAction,
+        id: Option<&str>,
+    ) -> Result<()> {
+        if kind == TaskKind::Vision {
+            return self.start_vision(id, Some(action));
+        }
+        {
+            // Installation and local inference cannot start across one another.
+            let install = self.job.lock().unwrap();
+            if install.running && action != TaskAction::Pause {
+                return Err("请等待模型安装完成".into());
+            }
+            let mut local = self.local.lock().unwrap();
+            let job = local.job(kind);
+            if action == TaskAction::Pause {
+                job.paused = true;
+                job.message = "当前图片处理后暂停".into();
+                return Ok(());
+            }
+            if job.running && matches!(action, TaskAction::Retry | TaskAction::Generate) {
+                return Err("请先暂停当前任务，等待当前图片处理完成".into());
+            }
+            let library = self.library.lock().unwrap();
+            if kind == TaskKind::Ocr && !library.settings()?.ocr_enabled {
+                return Err("请先在偏好设置中启用本地 OCR".into());
+            }
+            let missing = if kind == TaskKind::Ocr {
+                intelligence::missing_ocr(&self.models)
+            } else {
+                intelligence::missing_embedding(&self.models)
+            };
+            if !missing.is_empty() {
+                return Err(format!("请先导入模型：{}", missing.join("、")).into());
+            }
+            if matches!(action, TaskAction::Retry | TaskAction::Generate) {
+                library.queue_task(kind, id, action == TaskAction::Retry)?;
+            }
+            if job.running {
+                job.paused = false;
+            } else {
+                let (pending, ..) = library.task_counts(kind)?;
+                *job = JobStatus {
+                    running: pending > 0,
+                    total: pending,
+                    ..Default::default()
+                };
+            }
+            if kind == TaskKind::Index {
+                local.index_only = id.map(str::to_owned);
+            }
+        }
+        self.start_local_worker();
+        Ok(())
+    }
+    pub fn auto_index(self: &Arc<Self>) -> Result<()> {
+        {
+            let install = self.job.lock().unwrap();
+            if install.running {
+                return Ok(());
+            }
+            let mut local = self.local.lock().unwrap();
+            let library = self.library.lock().unwrap();
+            let settings = library.settings()?;
+            for (kind, enabled, ready) in [
+                (
+                    TaskKind::Ocr,
+                    settings.ocr_enabled,
+                    intelligence::missing_ocr(&self.models).is_empty(),
+                ),
+                (
+                    TaskKind::Index,
+                    settings.auto_index,
+                    intelligence::missing_embedding(&self.models).is_empty(),
+                ),
+            ] {
+                let job = local.job(kind);
+                if enabled && ready && !job.paused && !job.running {
+                    let (pending, ..) = library.task_counts(kind)?;
+                    if pending > 0 {
+                        *job = JobStatus {
+                            running: true,
+                            total: pending,
+                            ..Default::default()
+                        };
+                    }
+                }
+            }
+        }
+        self.start_local_worker();
+        Ok(())
+    }
+    fn start_local_worker(self: &Arc<Self>) {
+        let mut local = self.local.lock().unwrap();
+        if local.worker_running || (!local.ocr.running && !local.index.running) {
+            return;
+        }
+        local.worker_running = true;
+        let state = Arc::clone(self);
+        std::thread::spawn(move || {
+            if let Err(error) = state.process_local() {
+                let mut local = state.local.lock().unwrap();
+                for kind in [TaskKind::Ocr, TaskKind::Index] {
+                    let job = local.job(kind);
+                    if job.running {
+                        job.error = Some(error.to_string());
+                        job.paused = true;
+                        job.running = false;
+                    }
+                }
+                local.worker_running = false;
+            }
+        });
+    }
+    fn process_local(self: &Arc<Self>) -> Result<()> {
+        loop {
+            let (kind, asset) = {
+                let mut local = self.local.lock().unwrap();
+                let library = self.library.lock().unwrap();
+                let settings = library.settings()?;
+                if local.ocr.paused || !settings.ocr_enabled {
+                    local.ocr.running = false;
+                }
+                if settings.auto_index {
+                    local.index_only = None;
+                }
+                if local.index.paused {
+                    local.index.running = false;
+                }
+                // Index each completed OCR result before starting the next image.
+                let mut work = None;
+                if local.index.running {
+                    work = library
+                        .next_task(
+                            TaskKind::Index,
+                            local.ocr.running,
+                            local.index_only.as_deref(),
+                        )?
+                        .map(|a| (TaskKind::Index, a));
+                    if work.is_none()
+                        && library
+                            .next_task(TaskKind::Index, false, local.index_only.as_deref())?
+                            .is_none()
+                    {
+                        local.index.running = false;
+                    }
+                }
+                if work.is_none() && local.ocr.running {
+                    work = library
+                        .next_task(TaskKind::Ocr, false, None)?
+                        .map(|a| (TaskKind::Ocr, a));
+                    if work.is_none() {
+                        local.ocr.running = false;
+                    }
+                }
+                let Some((kind, asset)) = work else {
+                    local.worker_running = false;
+                    return Ok(());
+                };
+                local.job(kind).message = asset.name.clone();
+                (kind, asset)
+            };
+            let loaded = self.with_models(|models| match kind {
+                TaskKind::Ocr => models.ensure_ocr(),
+                TaskKind::Index => models.ensure_embedding(),
+                TaskKind::Vision => unreachable!(),
+            });
+            if let Err(error) = loaded {
+                let mut local = self.local.lock().unwrap();
+                let job = local.job(kind);
+                job.error = Some(error.to_string());
+                job.paused = true;
+                job.running = false;
+                continue;
+            }
+            let error = if kind == TaskKind::Ocr {
+                let result = self.with_models(|models| models.recognize(Path::new(&asset.path)));
+                let library = self.library.lock().unwrap();
+                // Clearing text or disabling OCR during inference discards its result.
+                if library.settings()?.ocr_enabled
+                    && library
+                        .find_asset(&asset.id)?
+                        .is_some_and(|a| a.ocr_state == "pending")
+                {
+                    match result {
+                        Ok(text) => {
+                            library.update_ocr(&asset.id, &text)?;
+                            None
+                        }
+                        Err(error) => {
+                            library.mark_error(&asset.id, true)?;
+                            Some(error.to_string())
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                let source = Library::search_text(&asset);
+                let result = self.with_models(|models| models.embed(&source, false));
+                let mut library = self.library.lock().unwrap();
+                match result {
+                    Ok(vector) => {
+                        library.put_embedding(&asset.id, &source, &vector)?;
+                        None
+                    }
+                    Err(error) => {
+                        if library.find_asset(&asset.id)?.is_some_and(|a| {
+                            a.index_state != "idle" && Library::search_text(&a) == source
+                        }) {
+                            library.mark_error(&asset.id, false)?;
+                        }
+                        Some(error.to_string())
+                    }
+                }
+            };
+            {
+                let mut local = self.local.lock().unwrap();
+                let job = local.job(kind);
+                if let Some(error) = error {
+                    job.error = Some(format!("{}：{error}", asset.name));
+                } else {
+                    job.done += 1;
+                }
+            }
+            self.auto_index()?;
+        }
+    }
+    pub fn start_install(self: &Arc<Self>, paths: Vec<PathBuf>) -> Result<()> {
+        let mut job = self.job.lock().unwrap();
+        if job.running || self.local.lock().unwrap().worker_running {
+            return Err("请先暂停本地任务并等待当前图片处理完成".into());
+        }
+        *job = JobStatus {
+            running: true,
+            message: "准备安装模型".into(),
+            ..Default::default()
+        };
+        self.cancel.store(false, Ordering::Relaxed);
+        let state = Arc::clone(self);
+        std::thread::spawn(move || {
+            let progress = |done, total, message| {
+                let mut job = state.job.lock().unwrap();
+                job.done = done;
+                job.total = total;
+                job.message = message;
+            };
+            let result = intelligence::import_local(&state.models, &paths, &state.cancel, progress);
+            *state.intelligence.lock().unwrap() = None;
+            let proceed = {
+                let mut job = state.job.lock().unwrap();
+                job.running = false;
+                job.paused = state.cancel.load(Ordering::Relaxed);
+                match result {
+                    Ok(()) => {
+                        job.message = if job.paused {
+                            "模型安装已暂停"
+                        } else {
+                            "模型文件已校验并保存"
+                        }
+                        .into()
+                    }
+                    Err(error) => job.error = Some(error.to_string()),
+                }
+                !job.paused && job.error.is_none()
+            };
+            if proceed {
+                if let Err(error) = state.auto_index() {
+                    state.job.lock().unwrap().error = Some(error.to_string());
+                }
+            }
+        });
+        Ok(())
+    }
+    pub fn pause_install(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+    pub fn start_vision(
+        self: &Arc<Self>,
+        id: Option<&str>,
+        action: Option<TaskAction>,
+    ) -> Result<()> {
         let mut session = self.vision.lock().unwrap();
+        if action == Some(TaskAction::Pause) {
+            session.job.paused = true;
+            session.job.message = "当前请求完成后暂停".into();
+            return Ok(());
+        }
         if session.job.running {
-            return if explicit {
-                Err("图片理解任务正在运行".into())
+            if action == Some(TaskAction::Resume) {
+                session.job.paused = false;
+                return Ok(());
+            }
+            return if action.is_some() {
+                Err("请先暂停图片理解，等待当前请求完成".into())
             } else {
                 Ok(())
             };
         }
         let Some(client) = session.client.clone() else {
-            return if explicit {
+            return if action.is_some() {
                 Err("请先配置并保存图片理解 API".into())
             } else {
                 Ok(())
             };
         };
-        if !explicit && (session.paused || !client.config.auto_describe) {
+        if action.is_none() && (session.job.paused || !client.config.auto_describe) {
             return Ok(());
         }
-        let total = {
-            let library = self.library.lock().unwrap();
-            if explicit {
-                library.queue_vision(id)?;
-            }
-            library.vision_pending_count()?
+        let library = self.library.lock().unwrap();
+        if matches!(action, Some(TaskAction::Generate | TaskAction::Retry)) {
+            library.queue_task(TaskKind::Vision, id, action == Some(TaskAction::Retry))?;
+        }
+        let total = if id.is_some() {
+            1
+        } else {
+            library.task_counts(TaskKind::Vision)?.0
         };
         if total == 0 {
             return Ok(());
         }
-        session.paused = false;
         session.job = JobStatus {
             running: true,
             total,
@@ -108,13 +455,12 @@ impl AppState {
         let state = Arc::clone(self);
         let only = id.map(str::to_owned);
         std::thread::spawn(move || {
-            let result = state.describe_pending(&client, only.as_deref());
-            if let Err(error) = result {
+            if let Err(error) = state.describe_pending(&client, only.as_deref()) {
                 let mut session = state.vision.lock().unwrap();
-                session.paused = true;
+                session.job.paused = true;
                 session.job.running = false;
                 session.job.error = Some(error.to_string());
-                session.job.message = "图片理解已暂停，请检查错误后重试".into();
+                session.job.message = "图片理解已暂停".into();
             }
         });
         Ok(())
@@ -126,9 +472,8 @@ impl AppState {
     ) -> Result<()> {
         loop {
             let asset = {
-                // Queue completion and worker starts share a lock, including new imports.
                 let mut session = self.vision.lock().unwrap();
-                if session.paused {
+                if session.job.paused {
                     session.job.running = false;
                     session.job.message = "图片理解已暂停".into();
                     return Ok(());
@@ -143,225 +488,27 @@ impl AppState {
                     session.job.message = "描述生成完成".into();
                     return Ok(());
                 };
-                session.job.total = session.job.done
-                    + if only.is_some() {
-                        1
-                    } else {
-                        library.vision_pending_count()?
-                    };
-                session.job.message = format!("生成描述 · {}", asset.name);
+                session.job.message = asset.name.clone();
                 asset
             };
-            // No database or model locks are held across the network request.
-            match client.describe(Path::new(&asset.path)) {
-                Ok(description) => {
-                    self.library
-                        .lock()
-                        .unwrap()
-                        .update_vision(&asset.id, &description)?;
-                    self.auto_index()?;
-                }
-                Err(error) => {
-                    self.library
-                        .lock()
-                        .unwrap()
-                        .fail_vision(&asset.id, &error.to_string())?;
-                    return Err(format!("{}：{error}", asset.name).into());
+            let result = client.describe(Path::new(&asset.path));
+            {
+                let library = self.library.lock().unwrap();
+                if library
+                    .find_asset(&asset.id)?
+                    .is_some_and(|a| a.ai_state == "pending")
+                {
+                    match result {
+                        Ok(description) => library.update_vision(&asset.id, &description)?,
+                        Err(error) => {
+                            library.fail_vision(&asset.id, &error.to_string())?;
+                            return Err(format!("{}：{error}", asset.name).into());
+                        }
+                    }
                 }
             }
             self.vision.lock().unwrap().job.done += 1;
-        }
-    }
-    fn with_models<T>(&self, work: impl FnOnce(&mut Intelligence) -> Result<T>) -> Result<T> {
-        let mut models = self.intelligence.lock().unwrap();
-        if models.is_none() {
-            *models = Some(Intelligence::load(&self.models)?);
-        }
-        work(models.as_mut().unwrap())
-    }
-    pub fn auto_index(self: &Arc<Self>) -> Result<()> {
-        let enabled = self.library.lock().unwrap().settings()?.auto_index;
-        if enabled
-            && !self.cancel.load(Ordering::Relaxed)
-            && intelligence::missing(&self.models).is_empty()
-        {
-            self.start_job(None, None, false)?;
-        }
-        Ok(())
-    }
-    pub fn start_job(
-        self: &Arc<Self>,
-        install: Option<ModelInstall>,
-        id: Option<String>,
-        explicit: bool,
-    ) -> Result<()> {
-        let mut job = self.job.lock().unwrap();
-        if job.running {
-            return if explicit {
-                Err("已有任务运行中，请等待或暂停后再试".into())
-            } else {
-                Ok(())
-            };
-        }
-        if install.is_none() && !intelligence::missing(&self.models).is_empty() {
-            return Err("请先在偏好设置中导入或下载本地搜索模型".into());
-        }
-        if !explicit && install.is_none() && self.library.lock().unwrap().pending_count(None)? == 0
-        {
-            return Ok(());
-        }
-        if id.is_some() || (explicit && install.is_none()) {
-            self.library.lock().unwrap().queue_index(id.as_deref())?;
-        }
-        *job = JobStatus {
-            running: true,
-            message: match &install {
-                Some(ModelInstall::Download) => "准备下载模型",
-                Some(ModelInstall::Local(_)) => "校验本地模型文件",
-                None => "准备建立索引",
-            }
-            .into(),
-            ..Default::default()
-        };
-        self.cancel.store(false, Ordering::Relaxed);
-        let state = Arc::clone(self);
-        std::thread::spawn(move || {
-            let mut result = (|| -> Result<String> {
-                if let Some(install) = install {
-                    let progress = |done, total, message| {
-                        let mut job = state.job.lock().unwrap();
-                        job.done = done;
-                        job.total = total;
-                        job.message = message;
-                    };
-                    match install {
-                        ModelInstall::Download => {
-                            intelligence::download(&state.models, &state.cancel, progress)?
-                        }
-                        ModelInstall::Local(paths) => intelligence::import_local(
-                            &state.models,
-                            &paths,
-                            &state.cancel,
-                            progress,
-                        )?,
-                    }
-                    if state.cancel.load(Ordering::Relaxed) {
-                        return Ok("任务已暂停".into());
-                    }
-                    let missing = intelligence::missing(&state.models);
-                    if !missing.is_empty() {
-                        return Ok(format!("已导入所选文件，还缺少：{}", missing.join("、")));
-                    }
-                    // Verify that the installed files can actually be loaded before indexing.
-                    state.with_models(|_| Ok(()))?;
-                }
-                {
-                    let mut job = state.job.lock().unwrap();
-                    job.done = 0;
-                    job.total = 0;
-                }
-                state.index_pending(id.as_deref())?;
-                Ok("整理完成".into())
-            })();
-            loop {
-                let mut job = state.job.lock().unwrap();
-                // Finish under the same lock used to start workers. An import arriving
-                // at the end either joins this drain or starts the next worker.
-                let more = (|| -> Result<bool> {
-                    if result.is_err()
-                        || state.cancel.load(Ordering::Relaxed)
-                        || !intelligence::missing(&state.models).is_empty()
-                    {
-                        return Ok(false);
-                    }
-                    let library = state.library.lock().unwrap();
-                    Ok(library.settings()?.auto_index && library.pending_count(None)? > 0)
-                })();
-                match more {
-                    Ok(true) => {
-                        drop(job);
-                        result = state.index_pending(None).map(|()| "整理完成".into());
-                        continue;
-                    }
-                    Err(error) => result = Err(error),
-                    Ok(false) => {}
-                }
-                job.running = false;
-                match result {
-                    Err(error) => {
-                        job.error = Some(error.to_string());
-                        job.message = "任务未完成".into();
-                    }
-                    Ok(message) => {
-                        job.message = if state.cancel.load(Ordering::Relaxed) {
-                            "任务已暂停，可继续处理".into()
-                        } else if job.error.is_some() {
-                            "处理完成，部分项目失败".into()
-                        } else {
-                            message
-                        };
-                    }
-                }
-                break;
-            }
-        });
-        Ok(())
-    }
-    fn index_pending(&self, only: Option<&str>) -> Result<()> {
-        if self.library.lock().unwrap().pending_count(only)? == 0 {
-            return Ok(());
-        }
-        // Load once before draining: a broken installation must not fail every item.
-        self.with_models(|_| Ok(()))?;
-        loop {
-            if self.cancel.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            let (asset, pending) = {
-                let library = self.library.lock().unwrap();
-                (library.next_pending(only)?, library.pending_count(only)?)
-            };
-            let Some(asset) = asset else {
-                return Ok(());
-            };
-            {
-                let mut job = self.job.lock().unwrap();
-                job.total = job.done + pending;
-            }
-            if self.cancel.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            self.job.lock().unwrap().message = format!("识别与索引 · {}", asset.name);
-            if asset.ocr_state == "pending" {
-                match self.with_models(|models| models.recognize(Path::new(&asset.path))) {
-                    Ok(text) => self.library.lock().unwrap().update_ocr(&asset.id, &text)?,
-                    Err(error) => {
-                        self.library.lock().unwrap().mark_error(&asset.id, true)?;
-                        self.job.lock().unwrap().error = Some(format!("{}：{error}", asset.name));
-                    }
-                }
-            }
-            // Read again so edits made during OCR are included in the embedding.
-            if self.cancel.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            let current = self.library.lock().unwrap().find_asset(&asset.id)?;
-            if let Some(current) = current.filter(|asset| asset.index_state == "pending") {
-                let source = Library::search_text(&current);
-                match self.with_models(|models| models.embed(&source, false)) {
-                    Ok(vector) => {
-                        self.library
-                            .lock()
-                            .unwrap()
-                            .put_embedding(&asset.id, &source, &vector)?;
-                    }
-                    Err(error) => {
-                        self.library.lock().unwrap().mark_error(&asset.id, false)?;
-                        self.job.lock().unwrap().error = Some(format!("{}：{error}", asset.name));
-                    }
-                }
-            }
-            self.job.lock().unwrap().done += 1;
+            self.auto_index()?;
         }
     }
     pub fn import_paths(
@@ -399,7 +546,7 @@ impl AppState {
                 }
                 if item.added > 0 {
                     self.auto_index()?;
-                    self.start_vision(None, false)?;
+                    self.start_vision(None, None)?;
                 }
             }
             Ok(report)
@@ -412,9 +559,6 @@ impl AppState {
         }
         result
     }
-}
-
-impl AppState {
     pub fn search(&self, query: &str, mode: &str, group_id: Option<i64>) -> Result<Vec<Asset>> {
         if !["hybrid", "keyword", "semantic"].contains(&mode) {
             return Err("无效的搜索模式".into());
@@ -424,10 +568,10 @@ impl AppState {
         }
         let mut embedding = None;
         if !query.trim().is_empty() && mode != "keyword" {
-            if intelligence::missing(&self.models).is_empty() {
+            if intelligence::missing_embedding(&self.models).is_empty() {
                 embedding = Some(self.with_models(|models| models.embed(query, true))?);
             } else if mode == "semantic" {
-                return Err("语义搜索需要本地模型，请先导入或下载模型并建立索引".into());
+                return Err("语义搜索需要 Qwen 模型与 tokenizer，请先导入并建立索引".into());
             }
         }
         self.library
@@ -435,47 +579,65 @@ impl AppState {
             .unwrap()
             .search(query, mode, group_id, embedding.as_deref())
     }
-    pub fn model_status(&self) -> ModelStatus {
-        let missing = intelligence::missing(&self.models);
-        ModelStatus {
-            ready: missing.is_empty(),
+    pub fn model_status(&self) -> Result<ModelStatus> {
+        let job = self.job.lock().unwrap().clone();
+        let import = self.import_job.lock().unwrap().clone();
+        let vision = self.vision.lock().unwrap().job.clone();
+        let (ocr, index) = {
+            let local = self.local.lock().unwrap();
+            (local.ocr.clone(), local.index.clone())
+        };
+        let library = self.library.lock().unwrap();
+        let counts = |mut job: JobStatus, kind| -> Result<JobStatus> {
+            (job.pending, job.failed, job.completed, job.incomplete) = library.task_counts(kind)?;
+            job.total = job.done + job.pending + job.failed;
+            if !job.running {
+                job.message.clear();
+            }
+            if !job.running && job.pending == 0 && job.failed == 0 {
+                job.error = None;
+            }
+            Ok(job)
+        };
+        Ok(ModelStatus {
+            ready: intelligence::missing_embedding(&self.models).is_empty(),
+            ocr_ready: intelligence::missing_ocr(&self.models).is_empty(),
+            ocr_enabled: library.settings()?.ocr_enabled,
             directory: self.models.to_string_lossy().into_owned(),
-            missing,
-            job: self.job.lock().unwrap().clone(),
-            import: self.import_job.lock().unwrap().clone(),
-            vision: self.vision.lock().unwrap().job.clone(),
-        }
+            missing: intelligence::missing(&self.models),
+            job,
+            import,
+            ocr: counts(ocr, TaskKind::Ocr)?,
+            index: counts(index, TaskKind::Index)?,
+            vision: counts(vision, TaskKind::Vision)?,
+        })
     }
     pub fn vision_status(&self) -> Result<VisionStatus> {
         let session = self.vision.lock().unwrap();
         Ok(VisionStatus {
-            config: self.library.lock().unwrap().vision_config()?,
+            config: self
+                .library
+                .lock()
+                .unwrap()
+                .vision_config()?
+                .unwrap_or_default(),
             active: session.client.is_some(),
-            has_api_key: session.client.as_ref().is_some_and(VisionClient::has_key),
         })
     }
-    pub fn save_vision_config(
-        self: &Arc<Self>,
-        config: VisionConfig,
-        api_key: Option<String>,
-    ) -> Result<()> {
+    pub fn save_vision_config(self: &Arc<Self>, config: VisionConfig) -> Result<()> {
         {
             let mut session = self.vision.lock().unwrap();
             if session.job.running {
                 return Err("请先暂停图片理解任务再修改配置".into());
             }
-            let key = match api_key {
-                Some(key) => key,
-                None => match &session.client {
-                    Some(client) => client.retained_key(&config)?,
-                    None => String::new(),
-                },
-            };
-            let client = VisionClient::new(config.clone(), key)?;
-            self.library.lock().unwrap().save_vision_config(&config)?;
+            let client = VisionClient::new(config)?;
+            self.library
+                .lock()
+                .unwrap()
+                .save_vision_config(&client.config)?;
             session.client = Some(client);
         }
-        self.start_vision(None, false)
+        self.start_vision(None, None)
     }
     pub fn test_vision(&self) -> Result<Description> {
         let client = self
@@ -487,17 +649,6 @@ impl AppState {
             .ok_or("请先保存 API 配置")?;
         client.probe()
     }
-    pub fn pause_vision(&self) {
-        let mut session = self.vision.lock().unwrap();
-        session.paused = true;
-        if session.job.running {
-            session.job.message = "当前请求完成后暂停".into();
-        }
-    }
-    pub fn pause_index(&self) {
-        self.cancel.store(true, Ordering::Relaxed);
-    }
 }
-
 #[cfg(test)]
 mod tests;

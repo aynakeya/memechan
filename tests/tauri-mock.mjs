@@ -35,21 +35,41 @@ const assets = names.map((name, i) => {
     score: null,
   }
 })
-const settings = { copySize: 0, allowUpscale: false, autoIndex: true }
+const settings = { copySize: 0, allowUpscale: false, autoIndex: true, ocrEnabled: true }
 const vision = {
-  config: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash', autoDescribe: false },
+  config: {
+    baseUrl: 'https://api.deepseek.com',
+    model: 'deepseek-v4-flash',
+    autoDescribe: false,
+    apiKey: '',
+  },
   active: false,
-  hasApiKey: false,
 }
 window.testCalls = []
 window.testModelImportResult = true
+const job = () => ({
+  running: false,
+  paused: false,
+  pending: 0,
+  failed: 0,
+  completed: 0,
+  incomplete: 0,
+  done: 0,
+  total: 0,
+  message: '',
+  error: null,
+})
 window.testModel = {
+  ocrReady: true,
+  ocrEnabled: true,
   ready: true,
   directory: '/local/models',
   missing: [],
-  job: { running: false, done: 0, total: 0, message: '', error: null },
-  import: { running: false, done: 0, total: 0, message: '', error: null },
-  vision: { running: false, done: 0, total: 0, message: '', error: null },
+  job: job(),
+  import: job(),
+  vision: job(),
+  ocr: job(),
+  index: job(),
 }
 
 mockIPC(
@@ -63,45 +83,67 @@ mockIPC(
           settings,
         }),
       )
-    if (command === 'model_status') return window.structuredClone(window.testModel)
+    if (command === 'model_status') {
+      const status = window.structuredClone(window.testModel)
+      for (const [kind, field] of [
+        ['ocr', 'ocrState'],
+        ['vision', 'aiState'],
+        ['index', 'indexState'],
+      ]) {
+        status[kind].completed = assets.filter((asset) => asset[field] === 'ready').length
+        status[kind].incomplete = assets.length - status[kind].completed
+      }
+      return status
+    }
     if (command === 'vision_status') return JSON.parse(JSON.stringify(vision))
     if (command === 'save_vision_config') {
       vision.config = { ...args.config }
       vision.active = true
-      if (args.apiKey !== null) vision.hasApiKey = !!args.apiKey
       return
     }
     if (command === 'test_vision')
       return { model: 'test-vision', text: '左侧红色方块，右侧蓝色圆形。' }
-    if (command === 'start_vision') {
-      Object.assign(window.testModel.vision, {
-        running: true,
-        done: 0,
-        total: args.id ? 1 : assets.length,
-        message: '生成描述',
-        error: null,
-      })
-      if (args.id) {
+    if (command === 'control_task') {
+      const task = window.testModel[args.kind]
+      if (args.action === 'pause') {
+        Object.assign(task, { running: false, paused: true, message: '任务已暂停' })
+        return
+      }
+      Object.assign(task, { running: true, paused: false, done: 0, error: null, failed: 0 })
+      if (args.kind === 'index' && args.action === 'generate') {
+        for (const asset of assets) {
+          if (['idle', 'error'].includes(asset.indexState)) asset.indexState = 'pending'
+        }
+        task.pending = assets.filter((asset) => asset.indexState === 'pending').length
+      }
+      if (args.kind === 'vision' && args.id) {
         const asset = assets.find((asset) => asset.id === args.id)
         asset.aiState = 'pending'
+        task.pending = 1
         window.setTimeout(() => {
-          Object.assign(asset, {
-            aiDescription: '女孩举手敬礼，表示收到。',
-            aiState: 'ready',
-            aiModel: 'test-vision',
-          })
-          Object.assign(window.testModel.vision, {
-            running: false,
-            done: 1,
-            message: '描述生成完成',
-          })
+          if (asset.aiState === 'pending')
+            Object.assign(asset, {
+              aiDescription: '女孩举手敬礼，表示收到。',
+              aiState: 'ready',
+              aiModel: 'test-vision',
+            })
+          Object.assign(task, { running: false, done: 1, pending: 0, message: '描述生成完成' })
         }, 500)
       }
       return
     }
-    if (command === 'pause_vision') {
-      Object.assign(window.testModel.vision, { running: false, message: '图片理解已暂停' })
-      return
+    if (command === 'clear_text') {
+      const selected = assets.filter((asset) => !args.id || asset.id === args.id)
+      for (const asset of selected) {
+        if (args.kind === 'ocr') Object.assign(asset, { ocrText: '', ocrState: 'idle' })
+        else if (args.kind === 'vision')
+          Object.assign(asset, { aiDescription: '', aiState: 'idle', aiModel: '', aiError: '' })
+        if (args.kind === 'index') asset.indexState = 'idle'
+        else if (asset.indexState !== 'idle') asset.indexState = 'pending'
+      }
+      if (args.kind === 'index')
+        Object.assign(window.testModel.index, { pending: 0, failed: 0, error: null })
+      return selected.length
     }
     if (command === 'import_models') {
       if (window.testModelImportResult) {
@@ -122,7 +164,10 @@ mockIPC(
       )
     }
     if (command === 'copy_asset') return '已复制图片'
-    if (command === 'save_settings') return Object.assign(settings, args.settings)
+    if (command === 'save_settings') {
+      window.testModel.ocrEnabled = args.settings.ocrEnabled
+      return Object.assign(settings, args.settings)
+    }
     if (command === 'search') throw new Error('测试：本地模型未就绪')
     if (command === 'import_files') {
       if (args.paths.length > 1) {

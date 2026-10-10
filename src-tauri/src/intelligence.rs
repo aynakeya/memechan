@@ -4,10 +4,9 @@ use paddle_ocr_rs::ocr_lite::OcrLite;
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File},
-    io::{Read, Write},
+    io::Read,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
 };
 use tokenizers::{Tokenizer, TruncationParams};
 
@@ -17,39 +16,41 @@ const MAX_MODEL_BYTES: u64 = 700 * 1024 * 1024;
 
 pub struct ModelFile {
     pub name: &'static str,
-    url: &'static str,
     sha256: &'static str,
 }
 pub const FILES: &[ModelFile] = &[
     ModelFile {
         name: "ocr-v5-det.onnx",
-        url: "https://www.modelscope.cn/api/v1/models/RapidAI/RapidOCR/repo?Revision=v3.9.2&FilePath=onnx/PP-OCRv5/det/ch_PP-OCRv5_det_mobile.onnx",
         sha256: "4d97c44a20d30a81aad087d6a396b08f786c4635742afc391f6621f5c6ae78ae",
     },
     ModelFile {
         name: "ocr-cls.onnx",
-        url: "https://huggingface.co/SWHL/RapidOCR/resolve/4e4644045a07c403b1ad40ca97340ecb4a8dc2c1/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
         sha256: "e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c",
     },
     ModelFile {
         name: "ocr-v5-rec.onnx",
-        url: "https://www.modelscope.cn/api/v1/models/RapidAI/RapidOCR/repo?Revision=v3.9.2&FilePath=onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile.onnx",
         sha256: "5825fc7ebf84ae7a412be049820b4d86d77620f204a041697b0494669b1742c5",
     },
     ModelFile {
         name: "qwen3-embedding-0.6b.onnx",
-        url: "https://huggingface.co/onnx-community/Qwen3-Embedding-0.6B-ONNX/resolve/c25a394dd583836952667c12f008335071b3f43d/onnx/model_quantized.onnx",
         sha256: "87cd124e0ef1fd1f223ebc283efccbaeac386d0b08344701c46975d0657b591f",
     },
     ModelFile {
         name: "qwen3-tokenizer.json",
-        url: "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B/resolve/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3/tokenizer.json",
         sha256: "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
     },
 ];
-
 pub fn missing(directory: &Path) -> Vec<String> {
-    FILES
+    missing_files(directory, FILES)
+}
+pub fn missing_ocr(directory: &Path) -> Vec<String> {
+    missing_files(directory, &FILES[..3])
+}
+pub fn missing_embedding(directory: &Path) -> Vec<String> {
+    missing_files(directory, &FILES[3..])
+}
+fn missing_files(directory: &Path, files: &[ModelFile]) -> Vec<String> {
+    files
         .iter()
         .filter(|file| !directory.join(file.name).is_file())
         .map(|file| file.name.to_string())
@@ -74,7 +75,7 @@ fn checksum(path: &Path) -> Result<String> {
 }
 fn verify(path: &Path, file: &ModelFile) -> Result<()> {
     if checksum(path)? != file.sha256 {
-        return Err(format!("{} 校验失败，请重新导入匹配的文件或重新下载", file.name).into());
+        return Err(format!("{} 校验失败，请重新导入匹配的文件", file.name).into());
     }
     Ok(())
 }
@@ -122,75 +123,32 @@ pub fn import_local(
     }
     Ok(())
 }
-pub fn download(
-    directory: &Path,
-    cancel: &AtomicBool,
-    mut progress: impl FnMut(usize, usize, String),
-) -> Result<()> {
-    fs::create_dir_all(directory)?;
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(20))
-        .timeout(Duration::from_secs(600))
-        .build()?;
-    for (index, file) in FILES.iter().enumerate() {
-        if cancel.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        let target = directory.join(file.name);
-        if target.exists() {
-            verify(&target, file)?;
-            continue;
-        }
-        let mut response = client.get(file.url).send()?.error_for_status()?;
-        let temporary = target.with_extension("part");
-        let mut output = File::create(&temporary)?;
-        let mut buffer = [0; 65536];
-        let mut bytes = 0_u64;
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                drop(output);
-                fs::remove_file(&temporary)?;
-                return Ok(());
-            }
-            let count = response.read(&mut buffer)?;
-            if count == 0 {
-                break;
-            }
-            bytes += count as u64;
-            if bytes > MAX_MODEL_BYTES {
-                return Err("模型下载超出预期大小".into());
-            }
-            output.write_all(&buffer[..count])?;
-            progress(
-                index,
-                FILES.len(),
-                format!("下载 {} · {:.1} MB", file.name, bytes as f64 / 1_000_000.0),
-            );
-        }
-        output.sync_all()?;
-        drop(output);
-        verify(&temporary, file)?;
-        fs::rename(temporary, target)?;
-        progress(
-            index + 1,
-            FILES.len(),
-            format!("{} 已下载并校验", file.name),
-        );
-    }
-    Ok(())
-}
-
 pub struct Intelligence {
-    ocr: OcrLite,
+    directory: PathBuf,
+    ocr: Option<OcrLite>,
+    embedding: Option<Embedding>,
+}
+struct Embedding {
     session: Session,
     tokenizer: Tokenizer,
 }
 impl Intelligence {
     pub fn load(directory: &Path) -> Result<Self> {
-        for file in FILES {
+        ort::init().with_telemetry(false).commit()?;
+        Ok(Self {
+            directory: directory.to_path_buf(),
+            ocr: None,
+            embedding: None,
+        })
+    }
+    pub fn ensure_ocr(&mut self) -> Result<()> {
+        if self.ocr.is_some() {
+            return Ok(());
+        }
+        let directory = &self.directory;
+        for file in &FILES[..3] {
             verify(&directory.join(file.name), file)?;
         }
-        ort::init().with_telemetry(false).commit()?;
         let mut ocr = OcrLite::new();
         ocr.init_models(
             &directory.join("ocr-v5-det.onnx").to_string_lossy(),
@@ -198,6 +156,17 @@ impl Intelligence {
             &directory.join("ocr-v5-rec.onnx").to_string_lossy(),
             2,
         )?;
+        self.ocr = Some(ocr);
+        Ok(())
+    }
+    pub fn ensure_embedding(&mut self) -> Result<()> {
+        if self.embedding.is_some() {
+            return Ok(());
+        }
+        let directory = &self.directory;
+        for file in &FILES[3..] {
+            verify(&directory.join(file.name), file)?;
+        }
         let session = Session::builder()?
             .with_intra_threads(2)?
             .with_inter_threads(1)?
@@ -208,18 +177,20 @@ impl Intelligence {
             max_length: 512,
             ..Default::default()
         }))?;
-        Ok(Self {
-            ocr,
-            session,
-            tokenizer,
-        })
+        self.embedding = Some(Embedding { session, tokenizer });
+        Ok(())
     }
     pub fn recognize(&mut self, path: &Path) -> Result<String> {
+        self.ensure_ocr()?;
         let mut texts = Vec::new();
         for frame in media::sample_frames(path)? {
             // White compositing avoids turning transparent lettering into a black background.
             let rgb = media::rgb_on_white(&frame);
-            let result = self.ocr.detect(&rgb, 32, 960, 0.5, 0.3, 1.6, true, false)?;
+            let result = self
+                .ocr
+                .as_mut()
+                .unwrap()
+                .detect(&rgb, 32, 960, 0.5, 0.3, 1.6, true, false)?;
             for block in result.text_blocks {
                 let text = block.text.trim().to_string();
                 if !text.is_empty() && block.text_score >= 0.5 && !texts.contains(&text) {
@@ -230,15 +201,17 @@ impl Intelligence {
         Ok(texts.join("\n"))
     }
     pub fn embed(&mut self, text: &str, query: bool) -> Result<Vec<f32>> {
+        self.ensure_embedding()?;
+        let model = self.embedding.as_mut().unwrap();
         let text = if query {
             format!("Instruct: Given a description of a reaction, emotion, or action, retrieve the most relevant meme.\nQuery: {text}")
         } else {
             text.to_string()
         };
-        let encoding = self.tokenizer.encode(text, true)?;
+        let encoding = model.tokenizer.encode(text, true)?;
         let length = encoding.len();
         let mut inputs = Vec::new();
-        for input in &self.session.inputs {
+        for input in &model.session.inputs {
             // Each text is independent; the exported decoder starts with an empty cache.
             if input.name.starts_with("past_key_values.") {
                 let shape = input.input_type.tensor_shape().ok_or("无效的缓存输入")?;
@@ -247,7 +220,7 @@ impl Intelligence {
                 }
                 inputs.push((
                     input.name.clone(),
-                    Tensor::<f32>::new(self.session.allocator(), [1, shape[1], 0, shape[3]])?
+                    Tensor::<f32>::new(model.session.allocator(), [1, shape[1], 0, shape[3]])?
                         .into_dyn(),
                 ));
                 continue;
@@ -267,7 +240,7 @@ impl Intelligence {
                 Tensor::from_array(([1, length], values))?.into_dyn(),
             ));
         }
-        let outputs = self.session.run(inputs)?;
+        let outputs = model.session.run(inputs)?;
         let (shape, values) = outputs["last_hidden_state"].try_extract_tensor::<f32>()?;
         if shape.len() != 3
             || shape[0] != 1

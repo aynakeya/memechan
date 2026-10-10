@@ -26,6 +26,8 @@ const emit = defineEmits<{
   favorite: []
   save: []
   index: []
+  ocr: []
+  clear: [kind: 'ocr' | 'vision']
   describe: []
   settings: [tab: string]
   createGroup: []
@@ -107,6 +109,15 @@ const emit = defineEmits<{
             <UIcon name="i-lucide-scan-text" class="size-4 text-muted" />
             图片中的文字
           </h3>
+          <UButton
+            size="xs"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-eraser"
+            aria-label="清除这张图片的 OCR 文字"
+            :disabled="!asset.ocrText && asset.ocrState === 'idle'"
+            @click="emit('clear', 'ocr')"
+          />
           <UBadge
             :color="asset.ocrState === 'error' ? 'error' : 'neutral'"
             variant="subtle"
@@ -120,22 +131,33 @@ const emit = defineEmits<{
             asset.ocrText ||
             (asset.ocrState === 'ready'
               ? '未识别到文字，可添加自定义描述。'
-              : '配置模型并建立索引后显示。')
+              : asset.ocrState === 'idle'
+                ? '文字已清除，可重新识别。'
+                : '启用本地 OCR 并导入模型后可识别。')
           }}
         </p>
         <UButton
           variant="link"
           size="xs"
           trailing-icon="i-lucide-arrow-right"
-          :disabled="model?.job.running"
-          @click="model?.ready ? emit('index') : emit('settings', 'models')"
+          :disabled="model?.ocr.running"
+          @click="model?.ocrReady && model.ocrEnabled ? emit('ocr') : emit('settings', 'ocr')"
         >
-          {{ model?.ready ? '重新识别与索引' : '设置本地模型' }}
+          {{ model?.ocrReady && model.ocrEnabled ? '重新识别文字' : '设置本地 OCR' }}
         </UButton>
       </div>
       <div class="space-y-3 border-t border-default pt-4">
         <div class="flex items-center justify-between gap-2">
           <h3 class="text-sm font-medium">图片描述</h3>
+          <UButton
+            size="xs"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-eraser"
+            aria-label="清除这张图片的描述"
+            :disabled="!asset.aiDescription && asset.aiState === 'idle'"
+            @click="emit('clear', 'vision')"
+          />
           <UBadge
             :color="asset.aiState === 'error' ? 'error' : 'neutral'"
             variant="subtle"
@@ -167,6 +189,19 @@ const emit = defineEmits<{
                 ? '通过 API 重新生成'
                 : '通过 API 生成描述'
           }}
+        </UButton>
+      </div>
+      <div
+        class="flex items-center justify-between border-t border-default pt-4 text-xs text-muted"
+      >
+        <span>索引：{{ stateLabel(asset.indexState) }}</span>
+        <UButton
+          variant="link"
+          size="xs"
+          :disabled="model?.index.running"
+          @click="model?.ready ? emit('index') : emit('settings', 'models')"
+        >
+          重新索引
         </UButton>
       </div>
       <div class="space-y-3 border-t border-default pt-4">

@@ -20,13 +20,11 @@ fn vision_sends_animation_frames_and_rejects_failed_or_incomplete_descriptions()
         ),
     ];
     let (base_url, server) = server(responses, |_| {})?;
-    let client = VisionClient::new(
-        VisionConfig {
-            base_url,
-            ..Default::default()
-        },
-        secret.into(),
-    )?;
+    let client = VisionClient::new(VisionConfig {
+        base_url,
+        api_key: secret.into(),
+        ..Default::default()
+    })?;
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("action.gif");
     {
@@ -69,7 +67,7 @@ fn vision_sends_animation_frames_and_rejects_failed_or_incomplete_descriptions()
 }
 
 #[test]
-fn api_addresses_preserve_prefixes_and_credentials_cannot_move_to_another_endpoint() -> Result<()> {
+fn api_configuration_validates_addresses_and_credentials() -> Result<()> {
     for (base, expected) in [
         (
             "https://example.com/v1/",
@@ -99,12 +97,10 @@ fn api_addresses_preserve_prefixes_and_credentials_cannot_move_to_another_endpoi
         .endpoint()
         .is_err());
     }
-    let client = VisionClient::new(VisionConfig::default(), "test-key".into())?;
-    assert!(client
-        .retained_key(&VisionConfig {
-            base_url: "https://another.example.com".into(),
-            ..Default::default()
-        })
-        .is_err());
+    assert!(VisionClient::new(VisionConfig {
+        api_key: "invalid\nkey".into(),
+        ..Default::default()
+    })
+    .is_err());
     Ok(())
 }

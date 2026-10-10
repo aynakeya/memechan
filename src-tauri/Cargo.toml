@@ -39,3 +39,25 @@ paddle-ocr-rs = { version = "=0.6.1", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# Keep pixel loops and codecs fast in tauri dev, while application code stays debuggable.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.image-webp]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.gif]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3

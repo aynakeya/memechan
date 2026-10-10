@@ -12,6 +12,9 @@ import type {
   Snapshot,
   VisionConfig,
   VisionStatus,
+  TaskKind,
+  TaskAction,
+  ClearKind,
 } from './types'
 
 export const isDesktop = isTauri()
@@ -37,16 +40,15 @@ export const api = {
   saveSettings: (settings: Settings) => invoke<void>('save_settings', { settings }),
   copy: (id: string, size: number | null) => invoke<string>('copy_asset', { id, size }),
   models: () => invoke<ModelStatus>('model_status'),
-  installModels: () => invoke<void>('install_models'),
   importModels: () => invoke<boolean>('import_models'),
-  index: (id: string | null = null) => invoke<void>('start_index', { id }),
-  pauseIndex: () => invoke<void>('pause_index'),
+  task: (kind: TaskKind, action: TaskAction, id: string | null = null) =>
+    invoke<void>('control_task', { kind, action, id }),
+  clearText: (kind: ClearKind, id: string | null = null) =>
+    invoke<number>('clear_text', { kind, id }),
+  pauseInstall: () => invoke<void>('pause_install'),
   visionStatus: () => invoke<VisionStatus>('vision_status'),
-  saveVisionConfig: (config: VisionConfig, apiKey: string | null) =>
-    invoke<void>('save_vision_config', { config, apiKey }),
+  saveVisionConfig: (config: VisionConfig) => invoke<void>('save_vision_config', { config }),
   testVision: () => invoke<{ text: string; model: string }>('test_vision'),
-  describe: (id: string | null = null) => invoke<void>('start_vision', { id }),
-  pauseVision: () => invoke<void>('pause_vision'),
   onDrop: (handler: (type: DragDropEvent['type'], paths: string[]) => void) => {
     if (!isDesktop) return
     return getCurrentWebview().onDragDropEvent(({ payload }) =>

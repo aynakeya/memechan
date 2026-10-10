@@ -134,23 +134,18 @@ desktopTest('设置草稿、本地模型与图片理解配置', async (page) => 
     snapshots,
   )
   assert.equal(await page.getByLabel('默认复制最长边').inputValue(), '640')
-  await page.getByRole('tab', { name: '本地搜索模型', exact: true }).click()
+  await page.getByRole('tab', { name: 'Embedding', exact: true }).click()
   await page.getByText('还需导入：', { exact: false }).waitFor()
   await page.getByRole('button', { name: '导入本地模型', exact: true }).click()
   assert.equal(
     await page.getByRole('button', { name: '导入本地模型', exact: true }).isEnabled(),
     true,
   )
-  assert.equal(await page.getByRole('button', { name: '继续处理待索引表情' }).count(), 0)
   await page.evaluate(() => {
     window.testModelImportResult = true
   })
   await page.getByRole('button', { name: '导入本地模型', exact: true }).click()
-  await page.getByRole('button', { name: '继续处理待索引表情' }).waitFor()
-  assert.equal(
-    await page.evaluate(() => window.testCalls.some((call) => call.command === 'install_models')),
-    false,
-  )
+  await page.waitForFunction(() => window.testModel.ready)
   await page.getByRole('tab', { name: '图片理解 API', exact: true }).click()
   assert.equal(
     await page.getByRole('button', { name: '测试图片理解', exact: true }).isEnabled(),
@@ -159,17 +154,124 @@ desktopTest('设置草稿、本地模型与图片理解配置', async (page) => 
   await page.getByLabel('API Key', { exact: true }).fill('ui-test-key')
   await page.getByRole('button', { name: '保存 API 配置', exact: true }).click()
   await page.getByText('API 配置已保存', { exact: true }).waitFor()
-  assert.equal(await page.getByLabel('API Key', { exact: true }).inputValue(), '')
+  await page.getByRole('button', { name: '关闭弹窗', exact: true }).click()
+  await page.getByRole('button', { name: '偏好设置', exact: true }).click()
+  await page.getByRole('tab', { name: '图片理解 API', exact: true }).click()
+  const key = page.getByLabel('API Key', { exact: true })
+  assert.equal(await key.inputValue(), 'ui-test-key')
+  assert.equal(await key.getAttribute('type'), 'password')
+  await page.getByRole('button', { name: '显示 API Key', exact: true }).click()
+  assert.equal(await key.getAttribute('type'), 'text')
+  await page.getByRole('button', { name: '隐藏 API Key', exact: true }).click()
+  await page.getByLabel('API 地址', { exact: true }).fill('http://localhost:8080/v1')
+  assert.equal(await key.inputValue(), '')
+  for (const value of ['ui-updated-key', '']) {
+    await key.fill(value)
+    await page.getByRole('button', { name: '保存 API 配置', exact: true }).click()
+    await page.waitForFunction(
+      (expected) =>
+        window.testCalls.some(
+          (call) => call.command === 'save_vision_config' && call.args.config.apiKey === expected,
+        ),
+      value,
+    )
+    await page.getByRole('button', { name: '关闭弹窗', exact: true }).click()
+    await page.getByRole('button', { name: '偏好设置', exact: true }).click()
+    await page.getByRole('tab', { name: '图片理解 API', exact: true }).click()
+    assert.equal(await key.inputValue(), value)
+    assert.equal(await key.getAttribute('type'), 'password')
+  }
   await page.getByRole('button', { name: '测试图片理解', exact: true }).click()
   await page.getByRole('status').filter({ hasText: '左侧红色方块' }).waitFor()
-  await page.getByRole('button', { name: '生成缺失描述 / 继续队列', exact: true }).click()
-  await page.getByRole('button', { name: '暂停图片理解', exact: true }).click()
-  await page.getByText('图片理解已暂停', { exact: true }).waitFor()
-  await page.getByRole('button', { name: '关闭弹窗' }).click()
+  await page.getByRole('button', { name: '关闭弹窗', exact: true }).click()
+  await page.getByRole('button', { name: '任务管理', exact: true }).click()
+  const task = page.getByRole('region', { name: '图片理解 API', exact: true })
+  await task.getByRole('button', { name: '生成缺失描述', exact: true }).click()
+  await task.getByRole('button', { name: '暂停', exact: true }).click()
+  await task.getByText('已暂停', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '关闭任务管理' }).click()
   await page.getByRole('article', { name: '正在认真摸鱼', exact: true }).click()
   await page.getByRole('button', { name: '通过 API 生成描述', exact: true }).click()
   await page.getByText('女孩举手敬礼，表示收到。', { exact: true }).waitFor()
   assert.equal(await page.getByLabel('我的描述').inputValue(), '假装忙碌，其实想下班')
+  await page.getByRole('button', { name: '清除这张图片的描述', exact: true }).click()
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByText('女孩举手敬礼，表示收到。', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '清除这张图片的描述', exact: true }).click()
+  await page.getByRole('button', { name: '确认清除', exact: true }).click()
+  await page.getByText('女孩举手敬礼，表示收到。', { exact: true }).waitFor({ state: 'hidden' })
+  await page.getByRole('button', { name: '清除这张图片的 OCR 文字', exact: true }).click()
+  await page.getByRole('button', { name: '确认清除', exact: true }).click()
+  await page.getByText('文字已清除，可重新识别。', { exact: true }).waitFor()
+  assert.equal(await page.getByLabel('我的描述').inputValue(), '假装忙碌，其实想下班')
+})
+
+desktopTest('停用 OCR、独立控制任务与清除整个资料库的文字', async (page) => {
+  await page.evaluate(() => {
+    window.testModel.index.message = 'last-completed-meme.png'
+  })
+  await page.getByRole('button', { name: '偏好设置', exact: true }).click()
+  await page.getByRole('tab', { name: 'OCR', exact: true }).click()
+  await page.getByRole('switch', { name: '启用本地 OCR', exact: true }).click()
+  await page.waitForFunction(() => !window.testModel.ocrEnabled)
+  await page.getByRole('button', { name: '关闭弹窗', exact: true }).click()
+  await page.getByRole('button', { name: '任务管理', exact: true }).click()
+  const ocr = page.getByRole('region', { name: '本地 OCR', exact: true })
+  await ocr.getByText('已停用', { exact: true }).waitFor()
+  await ocr.getByText('已识别 6', { exact: true }).waitFor()
+  await ocr.getByText('未识别 0', { exact: true }).waitFor()
+  const vision = page.getByRole('region', { name: '图片理解 API', exact: true })
+  await vision.getByText('已生成 0', { exact: true }).waitFor()
+  await vision.getByText('未生成 6', { exact: true }).waitFor()
+  const index = page.getByRole('region', { name: '文字向量索引', exact: true })
+  await index.getByText('已索引 6', { exact: true }).waitFor()
+  assert.equal(await index.getByText('last-completed-meme.png', { exact: true }).count(), 0)
+  assert.equal(await index.getByRole('button', { name: '继续', exact: true }).count(), 0)
+  const progress = index
+    .getByRole('group', { name: '文字向量索引进度', exact: true })
+    .getByRole('progressbar')
+  assert.equal(
+    await progress.getAttribute('aria-valuenow'),
+    await progress.getAttribute('aria-valuemax'),
+  )
+  await index.getByRole('button', { name: '清除全部文字索引', exact: true }).click()
+  await page.getByRole('button', { name: '确认清除', exact: true }).click()
+  await index.getByText('已索引 0', { exact: true }).waitFor()
+  await index.getByText('未索引 6', { exact: true }).waitFor()
+  await ocr.getByText('已识别 6', { exact: true }).waitFor()
+  assert.equal(await progress.getAttribute('aria-valuenow'), '0')
+  await index.getByRole('button', { name: '建立缺失索引', exact: true }).click()
+  await index.getByRole('button', { name: '暂停', exact: true }).click()
+  await page.evaluate(() =>
+    Object.assign(window.testModel.index, { pending: 2, failed: 1, error: '测试索引失败' }),
+  )
+  await index.getByRole('button', { name: '重试失败项', exact: true }).click()
+  await index.getByRole('button', { name: '暂停', exact: true }).click()
+  await index.getByRole('button', { name: '继续', exact: true }).click()
+  await index.getByRole('button', { name: '暂停', exact: true }).waitFor()
+  await ocr.getByRole('button', { name: '清除全部 OCR 文字', exact: true }).click()
+  await page.getByRole('button', { name: '确认清除', exact: true }).click()
+  await ocr.getByText('已识别 0', { exact: true }).waitFor()
+  await ocr.getByText('未识别 6', { exact: true }).waitFor()
+  await index.getByText('未索引 6', { exact: true }).waitFor()
+  await vision.getByRole('button', { name: '清除全部图片描述', exact: true }).click()
+  await page.getByRole('button', { name: '确认清除', exact: true }).click()
+  await page.getByRole('button', { name: '关闭任务管理', exact: true }).click()
+  for (const name of ['今天也要开心', '正在认真摸鱼']) {
+    await page.getByRole('article', { name, exact: true }).click()
+    await page.getByText('文字已清除，可重新识别。', { exact: true }).waitFor()
+  }
+  assert.equal(await page.getByLabel('我的描述').inputValue(), '假装忙碌，其实想下班')
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.testCalls.filter((call) => call.command === 'clear_text').map((call) => call.args),
+    ),
+    [
+      { kind: 'index', id: null },
+      { kind: 'ocr', id: null },
+      { kind: 'vision', id: null },
+    ],
+  )
 })
 
 desktopTest('批量导入逐张可见且不阻塞浏览', async (page) => {

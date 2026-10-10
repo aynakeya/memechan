@@ -6,7 +6,7 @@ use image::{
         webp::WebPDecoder,
     },
     imageops::FilterType,
-    metadata::LoopCount,
+    metadata::{LoopCount, Orientation},
     AnimationDecoder, DynamicImage, Frame, ImageDecoder, ImageFormat, ImageReader,
 };
 use std::{
@@ -120,6 +120,21 @@ pub fn prepare_copy(
     result?;
     Ok(output)
 }
+
+pub fn clipboard_png(path: &Path) -> Result<Vec<u8>> {
+    let bytes = fs::read(path)?;
+    if image::guess_format(&bytes)? == ImageFormat::Png
+        && PngDecoder::new(Cursor::new(&bytes))?.orientation()? == Orientation::NoTransforms
+    {
+        // The native PNG clipboard format can use the original bytes without a round trip.
+        return Ok(bytes);
+    }
+    let image = inspect(&bytes)?.preview;
+    let mut png = Cursor::new(Vec::new());
+    image.write_to(&mut png, ImageFormat::Png)?;
+    Ok(png.into_inner())
+}
+
 fn animation_repeat(count: LoopCount) -> Option<Repeat> {
     match count {
         LoopCount::Infinite => Some(Repeat::Infinite),
@@ -216,6 +231,37 @@ pub fn sample_frames(path: &Path) -> Result<Vec<DynamicImage>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clipboard_png_preserves_pixels_alpha_and_display_orientation() -> Result<()> {
+        use image::{codecs::png::PngEncoder, ImageEncoder};
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("source.png");
+        let image = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(3, 2, |x, y| {
+            image::Rgba([x as u8 * 80, y as u8 * 120, 64, x as u8 * 100])
+        }));
+        for rotate in [false, true] {
+            let mut bytes = Vec::new();
+            let mut encoder = PngEncoder::new(&mut bytes);
+            if rotate {
+                // TIFF IFD with EXIF orientation 6 (90 degrees clockwise).
+                encoder.set_exif_metadata(vec![
+                    b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0, 0x12, 1, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0,
+                    0, 0, 0,
+                ])?;
+            }
+            image.write_with_encoder(encoder)?;
+            fs::write(&path, &bytes)?;
+            let copied = image::load_from_memory(&clipboard_png(&path)?)?.to_rgba8();
+            let expected = if rotate {
+                image.rotate90()
+            } else {
+                image.clone()
+            };
+            assert_eq!(copied, expected.to_rgba8());
+            assert_eq!(fs::read(&path)?, bytes);
+        }
+        Ok(())
+    }
     #[test]
     fn sizes_preserve_aspect_and_small_images() {
         assert_eq!(dimensions(800, 600, 256, false), (256, 192));

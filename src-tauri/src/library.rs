@@ -50,6 +50,11 @@ pub struct Settings {
     pub copy_size: u32,
     pub allow_upscale: bool,
     pub auto_index: bool,
+    #[serde(default = "enabled_by_default")]
+    pub ocr_enabled: bool,
+}
+fn enabled_by_default() -> bool {
+    true
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -57,6 +62,7 @@ impl Default for Settings {
             copy_size: 0,
             allow_upscale: false,
             auto_index: true,
+            ocr_enabled: true,
         }
     }
 }
@@ -71,6 +77,23 @@ pub struct ImportReport {
     pub added: usize,
     pub duplicates: usize,
     pub errors: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskKind {
+    Ocr,
+    Index,
+    Vision,
+}
+impl TaskKind {
+    fn column(self) -> &'static str {
+        match self {
+            Self::Ocr => "ocr_state",
+            Self::Index => "index_state",
+            Self::Vision => "ai_state",
+        }
+    }
 }
 
 pub struct Library {
@@ -100,7 +123,7 @@ impl Library {
             model TEXT NOT NULL, source TEXT NOT NULL, vector BLOB NOT NULL);")?;
         let version: u32 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version < 2 {
-            // Keep existing OCR text searchable until the downloaded v5 models replace it.
+            // Keep existing OCR text searchable until the imported v5 models replace it.
             let tx = db.transaction()?;
             tx.execute_batch(
                 "UPDATE assets SET ocr_state='pending',index_state='pending';
@@ -163,33 +186,20 @@ impl Library {
         )?;
         Ok(())
     }
-    pub fn vision_config(&self) -> Result<crate::vision::VisionConfig> {
+    pub fn vision_config(&self) -> Result<Option<crate::vision::VisionConfig>> {
         let json: Option<String> = self
             .db
             .query_row("SELECT value FROM vision_settings WHERE id=1", [], |row| {
                 row.get(0)
             })
             .optional()?;
-        match json {
-            Some(json) => Ok(serde_json::from_str(&json)?),
-            None => Ok(crate::vision::VisionConfig::default()),
-        }
+        json.map(|json| serde_json::from_str(&json).map_err(Into::into))
+            .transpose()
     }
     pub fn save_vision_config(&self, config: &crate::vision::VisionConfig) -> Result<()> {
         self.db.execute(
             "INSERT INTO vision_settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value",
             [serde_json::to_string(config)?],
-        )?;
-        Ok(())
-    }
-    pub fn queue_vision(&self, id: Option<&str>) -> Result<()> {
-        if let Some(id) = id {
-            self.asset(id)?;
-        }
-        self.db.execute(
-            "UPDATE assets SET ai_state='pending',ai_error='' WHERE
-            (?1 IS NOT NULL AND id=?1) OR (?1 IS NULL AND (ai_description='' OR ai_state='error'))",
-            [id],
         )?;
         Ok(())
     }
@@ -204,16 +214,10 @@ impl Library {
             .optional()?;
         id.map(|id| self.asset(&id)).transpose()
     }
-    pub fn vision_pending_count(&self) -> Result<usize> {
-        Ok(self.db.query_row(
-            "SELECT COUNT(*) FROM assets WHERE ai_state='pending'",
-            [],
-            |row| row.get(0),
-        )?)
-    }
     pub fn update_vision(&self, id: &str, description: &crate::vision::Description) -> Result<()> {
         self.db.execute(
-            "UPDATE assets SET ai_description=?1,ai_model=?2,ai_state='ready',ai_error='',index_state='pending' WHERE id=?3",
+            "UPDATE assets SET ai_description=?1,ai_model=?2,ai_state='ready',ai_error='',
+             index_state=CASE WHEN index_state='idle' THEN 'idle' ELSE 'pending' END WHERE id=?3",
             params![description.text, description.model, id],
         )?;
         Ok(())
@@ -224,6 +228,66 @@ impl Library {
             params![error, id],
         )?;
         Ok(())
+    }
+    pub fn clear_text(&mut self, kind: TaskKind, id: Option<&str>) -> Result<usize> {
+        let update = match kind {
+            TaskKind::Ocr => "ocr_text='',ocr_state='idle',index_state=CASE WHEN index_state='idle' THEN 'idle' ELSE 'pending' END",
+            TaskKind::Vision => "ai_description='',ai_state='idle',ai_error='',ai_model='',index_state=CASE WHEN index_state='idle' THEN 'idle' ELSE 'pending' END",
+            TaskKind::Index => "index_state='idle'",
+        };
+        if let Some(id) = id {
+            self.asset(id)?;
+        }
+        let tx = self.db.transaction()?;
+        let changed = tx.execute(
+            &format!("UPDATE assets SET {update} WHERE (?1 IS NULL OR id=?1)"),
+            [id],
+        )?;
+        tx.execute(
+            "DELETE FROM embeddings WHERE (?1 IS NULL OR asset_id=?1)",
+            [id],
+        )?;
+        tx.commit()?;
+        Ok(changed)
+    }
+    pub fn queue_task(&self, kind: TaskKind, id: Option<&str>, retry: bool) -> Result<()> {
+        if let Some(id) = id {
+            self.asset(id)?;
+        }
+        let column = kind.column();
+        let extra = if kind == TaskKind::Vision {
+            ",ai_error=''"
+        } else {
+            ""
+        };
+        self.db.execute(
+            &format!(
+                "UPDATE assets SET {column}='pending'{extra} WHERE
+            (?1 IS NOT NULL AND id=?1) OR
+            (?1 IS NULL AND ({column}='error' OR (?2=0 AND {column}='idle')))"
+            ),
+            params![id, retry],
+        )?;
+        Ok(())
+    }
+    pub fn task_counts(&self, kind: TaskKind) -> Result<(usize, usize, usize, usize)> {
+        let column = kind.column();
+        Ok(self.db.query_row(&format!(
+            "SELECT COUNT(*) FILTER (WHERE {column}='pending'),COUNT(*) FILTER (WHERE {column}='error'),
+            COUNT(*) FILTER (WHERE {column}='ready'),COUNT(*) FILTER (WHERE {column}<>'ready') FROM assets"
+        ), [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?)
+    }
+    pub fn next_task(
+        &self,
+        kind: TaskKind,
+        wait_for_ocr: bool,
+        only: Option<&str>,
+    ) -> Result<Option<Asset>> {
+        let column = kind.column();
+        let id: Option<String> = self.db.query_row(&format!(
+            "SELECT id FROM assets WHERE {column}='pending' AND (?1=0 OR ocr_state<>'pending') AND (?2 IS NULL OR id=?2) ORDER BY created_at,rowid LIMIT 1"
+        ), params![wait_for_ocr, only], |row| row.get(0)).optional()?;
+        id.map(|id| self.asset(&id)).transpose()
     }
     fn read_asset(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<Asset> {
         let id: String = row.get(0)?;
@@ -310,38 +374,6 @@ impl Library {
             Ok(None)
         }
     }
-    pub fn queue_index(&self, id: Option<&str>) -> Result<()> {
-        if let Some(id) = id {
-            self.asset(id)?;
-            self.db.execute(
-                "UPDATE assets SET ocr_state='pending',index_state='pending' WHERE id=?1",
-                [id],
-            )?;
-        } else {
-            self.db.execute(
-                "UPDATE assets SET
-                ocr_state=CASE WHEN ocr_state='error' THEN 'pending' ELSE ocr_state END,
-                index_state=CASE WHEN index_state='error' THEN 'pending' ELSE index_state END
-                WHERE ocr_state='error' OR index_state='error'",
-                [],
-            )?;
-        }
-        Ok(())
-    }
-    pub fn pending_count(&self, only: Option<&str>) -> Result<usize> {
-        Ok(self.db.query_row(
-            "SELECT COUNT(*) FROM assets WHERE (ocr_state='pending' OR index_state='pending') AND (?1 IS NULL OR id=?1)",
-            [only], |row| row.get(0),
-        )?)
-    }
-    pub fn next_pending(&self, only: Option<&str>) -> Result<Option<Asset>> {
-        let id: Option<String> = self.db.query_row(
-            "SELECT id FROM assets WHERE (ocr_state='pending' OR index_state='pending') AND (?1 IS NULL OR id=?1)
-             ORDER BY created_at,rowid LIMIT 1",
-            [only], |row| row.get(0),
-        ).optional()?;
-        id.map(|id| self.asset(&id)).transpose()
-    }
     pub fn groups(&self) -> Result<Vec<Group>> {
         Ok(self.db.prepare("SELECT g.id,g.name,g.color,COUNT(ag.asset_id) FROM groups g LEFT JOIN asset_groups ag ON ag.group_id=g.id GROUP BY g.id ORDER BY g.id")?
           .query_map([], |row| Ok(Group { id: row.get(0)?, name: row.get(1)?, color: row.get(2)?, count: row.get(3)? }))?
@@ -407,7 +439,7 @@ impl Library {
         let tx = self.db.transaction()?;
         let changed = tx.execute(
             "UPDATE assets SET
-               index_state=CASE WHEN description<>?1 THEN 'pending' ELSE index_state END,
+               index_state=CASE WHEN description<>?1 AND index_state<>'idle' THEN 'pending' ELSE index_state END,
                description=?1, favorite=?2 WHERE id=?3",
             params![description.trim(), favorite, id],
         )?;
@@ -485,7 +517,9 @@ impl Library {
             .join(format!("{id}.{}", info.extension));
         let thumbnail = self.root.join("thumbnails").join(format!("{id}.png"));
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
-        let auto_describe = self.vision_config()?.auto_describe;
+        let auto_describe = self
+            .vision_config()?
+            .is_some_and(|config| config.auto_describe);
         let tx = self.db.transaction()?;
         tx.execute(
             "INSERT INTO assets(id,name,extension,width,height,bytes,animated,created_at)
@@ -525,7 +559,8 @@ impl Library {
     }
     pub fn update_ocr(&self, id: &str, text: &str) -> Result<()> {
         self.db.execute(
-            "UPDATE assets SET ocr_text=?1,ocr_state='ready',index_state='pending' WHERE id=?2",
+            "UPDATE assets SET ocr_text=?1,ocr_state='ready',
+             index_state=CASE WHEN index_state='idle' THEN 'idle' ELSE 'pending' END WHERE id=?2",
             params![text, id],
         )?;
         Ok(())
@@ -545,7 +580,7 @@ impl Library {
         let Some(current) = self.find_asset(id)? else {
             return Ok(());
         };
-        if Self::search_text(&current) != source {
+        if current.index_state == "idle" || Self::search_text(&current) != source {
             return Ok(());
         }
         let bytes: Vec<u8> = vector

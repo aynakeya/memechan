@@ -2,9 +2,9 @@ use crate::{
     library::{Asset, Settings},
     media, Result,
 };
-use clipboard_rs::{
-    common::RustImage, Clipboard, ClipboardContent, ClipboardContext, RustImageData,
-};
+#[cfg(target_os = "windows")]
+use clipboard_rs::{common::RustImage, RustImageData};
+use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
 use std::{path::Path, sync::Mutex};
 #[derive(Default)]
 pub struct ClipboardState(Mutex<Option<ClipboardContext>>);
@@ -52,10 +52,24 @@ impl ClipboardState {
                 std::fs::read(&path)?,
             ));
         } else {
-            let preview = media::inspect(&std::fs::read(&path)?)?.preview;
-            contents.push(ClipboardContent::Image(RustImageData::from_dynamic_image(
-                preview,
-            )));
+            #[cfg(target_os = "windows")]
+            {
+                // Windows also needs the native bitmap formats provided by clipboard-rs.
+                let preview = media::inspect(&std::fs::read(&path)?)?.preview;
+                contents.push(ClipboardContent::Image(RustImageData::from_dynamic_image(
+                    preview,
+                )));
+            }
+            #[cfg(not(target_os = "windows"))]
+            contents.push(ClipboardContent::Other(
+                if cfg!(target_os = "macos") {
+                    "public.png"
+                } else {
+                    "image/png"
+                }
+                .into(),
+                media::clipboard_png(&path)?,
+            ));
         }
         clipboard.as_ref().unwrap().set(contents)?;
         Ok(if asset.animated {

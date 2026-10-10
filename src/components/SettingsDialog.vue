@@ -3,7 +3,6 @@ import { computed, ref, watch } from 'vue'
 import UAlert from '@nuxt/ui/components/Alert.vue'
 import UBadge from '@nuxt/ui/components/Badge.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
-import UCheckbox from '@nuxt/ui/components/Checkbox.vue'
 import UFormField from '@nuxt/ui/components/FormField.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
@@ -14,18 +13,17 @@ import UTabs from '@nuxt/ui/components/Tabs.vue'
 import { api } from '../api'
 import { errorMessage, useNotifications } from '../composables/useNotifications'
 import type { ModelStatus, Settings, VisionConfig, VisionStatus } from '../types'
-const props = defineProps<{ settings: Settings; model: ModelStatus | null; assetCount: number }>()
+const props = defineProps<{ settings: Settings; model: ModelStatus | null }>()
 const open = defineModel<boolean>('open', { required: true })
 const settingsTab = defineModel<string>('tab', { required: true })
 const vision = defineModel<VisionStatus | null>('vision', { required: true })
-const emit = defineEmits<{ saved: [settings: Settings]; refresh: []; index: []; describe: [] }>()
+const emit = defineEmits<{ saved: [settings: Settings]; refresh: [] }>()
 const draft = ref({ ...props.settings })
 const settingsSaving = ref(false)
 const importingModels = ref(false)
 const notify = useNotifications()
-const visionConfig = ref<VisionConfig>({ baseUrl: '', model: '', autoDescribe: false })
-const visionKey = ref(''),
-  clearVisionKey = ref(false),
+const visionConfig = ref<VisionConfig>({ baseUrl: '', model: '', autoDescribe: false, apiKey: '' })
+const showVisionKey = ref(false),
   visionSaving = ref(false),
   visionTesting = ref(false)
 const visionTestResult = ref(''),
@@ -36,17 +34,24 @@ const visionDirty = computed(
     (visionConfig.value.baseUrl !== vision.value.config.baseUrl ||
       visionConfig.value.model !== vision.value.config.model ||
       visionConfig.value.autoDescribe !== vision.value.config.autoDescribe ||
-      !!visionKey.value ||
-      clearVisionKey.value),
+      visionConfig.value.apiKey !== vision.value.config.apiKey),
 )
 
+const requiredMissing = computed(
+  () =>
+    props.model?.missing.filter((name) =>
+      name.startsWith(settingsTab.value === 'ocr' ? 'ocr-' : 'qwen3-'),
+    ) ?? [],
+)
 const settingsTabs = [
   { label: '复制与资料库', value: 'general' },
-  { label: '本地搜索模型', value: 'models' },
+  { label: 'OCR', value: 'ocr' },
+  { label: 'Embedding', value: 'models' },
   { label: '图片理解 API', value: 'vision' },
 ]
 
 watch(open, (opened) => {
+  showVisionKey.value = false
   if (opened) {
     draft.value = { ...props.settings }
     if (vision.value) visionConfig.value = { ...vision.value.config }
@@ -67,14 +72,6 @@ async function saveSettings() {
     settingsSaving.value = false
   }
 }
-async function setupModels() {
-  try {
-    await api.installModels()
-    emit('refresh')
-  } catch (error) {
-    notify(errorMessage(error), true)
-  }
-}
 async function importModels() {
   importingModels.value = true
   try {
@@ -86,9 +83,9 @@ async function importModels() {
   }
 }
 
-async function pauseIndex() {
+async function pauseInstall() {
   try {
-    await api.pauseIndex()
+    await api.pauseInstall()
     emit('refresh')
   } catch (error) {
     notify(errorMessage(error), true)
@@ -104,12 +101,7 @@ async function saveVision() {
   visionError.value = ''
   visionTestResult.value = ''
   try {
-    await api.saveVisionConfig(
-      { ...visionConfig.value },
-      clearVisionKey.value ? '' : visionKey.value || null,
-    )
-    visionKey.value = ''
-    clearVisionKey.value = false
+    await api.saveVisionConfig({ ...visionConfig.value })
     await refreshVision()
     emit('refresh')
     notify('API 配置已保存')
@@ -130,15 +122,6 @@ async function testVision() {
     visionError.value = errorMessage(error)
   } finally {
     visionTesting.value = false
-  }
-}
-
-async function pauseVision() {
-  try {
-    await api.pauseVision()
-    emit('refresh')
-  } catch (error) {
-    notify(errorMessage(error), true)
   }
 }
 </script>
@@ -191,7 +174,29 @@ async function pauseVision() {
             @update:model-value="saveSettings()"
           />
         </UFormField>
+        <UAlert
+          color="neutral"
+          variant="subtle"
+          icon="i-lucide-info"
+          description="原图始终保留。GIF 缩放保留动画；动态 WebP / APNG 缩放后以 GIF 复制，颜色和透明效果可能变化。原尺寸复制保留原文件格式。"
+        />
+      </div>
+      <div v-else-if="settingsTab === 'models' || settingsTab === 'ocr'" class="space-y-4">
         <UFormField
+          v-if="settingsTab === 'ocr'"
+          label="启用本地 OCR"
+          description="关闭后仍可用 API 图片描述和自定义描述建立索引。"
+          orientation="horizontal"
+        >
+          <USwitch
+            v-model="draft.ocrEnabled"
+            aria-label="启用本地 OCR"
+            :disabled="settingsSaving"
+            @update:model-value="saveSettings()"
+          />
+        </UFormField>
+        <UFormField
+          v-else
           label="自动建立搜索索引"
           description="模型就绪后，导入图片和修改描述会自动索引。"
           orientation="horizontal"
@@ -202,38 +207,24 @@ async function pauseVision() {
             @update:model-value="saveSettings()"
           />
         </UFormField>
-        <UAlert
-          color="neutral"
-          variant="subtle"
-          icon="i-lucide-info"
-          description="原图始终保留。GIF 缩放保留动画；动态 WebP / APNG 缩放后以 GIF 复制，颜色和透明效果可能变化。原尺寸复制保留原文件格式。"
-        />
-      </div>
-      <div v-else-if="settingsTab === 'models'" class="space-y-4">
-        <div class="model-item">
+        <div v-if="settingsTab === 'ocr'" class="model-item">
           <UIcon name="i-lucide-scan-text" class="size-5 shrink-0 text-primary" />
           <div class="flex-1">
             <h3 class="text-sm font-medium">图片文字识别</h3>
             <p class="mt-1 text-xs text-muted">PP-OCRv5 mobile · 中文 / 英文 / 日文</p>
           </div>
           <UBadge color="neutral" variant="subtle" size="xs">
-            {{
-              model && !model.missing.some((name) => name.startsWith('ocr-')) ? '已安装' : '待安装'
-            }}
+            {{ model?.ocrReady ? '已安装' : '待安装' }}
           </UBadge>
         </div>
-        <div class="model-item">
+        <div v-else class="model-item">
           <UIcon name="i-lucide-text-search" class="size-5 shrink-0 text-primary" />
           <div class="flex-1">
             <h3 class="text-sm font-medium">描述语义检索</h3>
             <p class="mt-1 text-xs text-muted">Qwen3-Embedding-0.6B · 多语言 · 本地推理</p>
           </div>
           <UBadge color="neutral" variant="subtle" size="xs">
-            {{
-              model && !model.missing.some((name) => name.startsWith('qwen3-'))
-                ? '已安装'
-                : '待安装'
-            }}
+            {{ model?.ready ? '已安装' : '待安装' }}
           </UBadge>
         </div>
         <div v-if="model?.job.running" class="space-y-3">
@@ -246,7 +237,7 @@ async function pauseVision() {
             :max="Math.max(1, model.job.total)"
             aria-label="模型处理进度"
           />
-          <UButton variant="soft" size="sm" icon="i-lucide-pause" @click="pauseIndex()">
+          <UButton variant="soft" size="sm" icon="i-lucide-pause" @click="pauseInstall()">
             暂停任务
           </UButton>
         </div>
@@ -264,54 +255,34 @@ async function pauseVision() {
         >
           {{ model.job.message }}
         </p>
-        <div class="flex flex-wrap gap-2">
-          <UButton
-            :variant="model?.ready ? 'outline' : 'solid'"
-            icon="i-lucide-folder-open"
-            :loading="importingModels"
-            :disabled="model?.job.running"
-            @click="importModels()"
-          >
-            {{ importingModels ? '选择模型文件…' : '导入本地模型' }}
-          </UButton>
-          <UButton
-            v-if="model?.ready"
-            icon="i-lucide-scan-text"
-            :disabled="model.job.running || importingModels"
-            @click="emit('index')"
-          >
-            继续处理待索引表情
-          </UButton>
-        </div>
+        <UButton
+          :variant="requiredMissing.length ? 'solid' : 'outline'"
+          icon="i-lucide-folder-open"
+          :loading="importingModels"
+          :disabled="model?.job.running"
+          @click="importModels()"
+        >
+          {{ importingModels ? '选择模型文件…' : '导入本地模型' }}
+        </UButton>
         <p class="text-xs text-muted">可多选模型文件。导入与推理均不联网，原文件保留。</p>
-        <p v-if="model?.missing.length" class="text-xs break-words text-muted">
-          还需导入：{{ model.missing.join('、') }}
+        <p v-if="requiredMissing.length" class="text-xs break-words text-muted">
+          还需导入：{{ requiredMissing.join('、') }}
         </p>
         <details class="model-location">
           <summary>模型保存位置与离线安装</summary>
           <code>{{ model?.directory || '桌面应用数据目录 / models' }}</code>
           <p>
-            支持 README 列出的 PP-OCRv5 mobile、Qwen3-Embedding-0.6B INT8 与配套
-            tokenizer，无需重命名。
+            支持 README 列出的{{
+              settingsTab === 'ocr'
+                ? ' PP-OCRv5 mobile 模型'
+                : ' Qwen3-Embedding-0.6B INT8 与配套 tokenizer'
+            }}，无需重命名。
           </p>
-        </details>
-        <details v-if="!model?.ready" class="model-location">
-          <summary>可选：联网下载</summary>
-          <p>点击下方按钮时连接 ModelScope 和 Hugging Face，完整模型约 647 MB，图片不会上传。</p>
-          <UButton
-            color="neutral"
-            variant="outline"
-            icon="i-lucide-download"
-            :disabled="model?.job.running || importingModels"
-            @click="setupModels()"
-          >
-            联网下载模型
-          </UButton>
         </details>
       </div>
       <div v-else class="space-y-4">
         <p class="text-xs text-muted">
-          生成时会将压缩图片发送到所配置的 API，可能产生费用。OCR 与文字检索仍在本地运行。
+          生成时会将压缩图片发送到所配置的 API，可能产生费用。文字索引在本地建立。
         </p>
         <form class="space-y-4" @submit.prevent="saveVision()">
           <UFormField label="API 地址" name="vision-url" required>
@@ -322,6 +293,7 @@ async function pauseVision() {
               placeholder="https://api.deepseek.com"
               required
               :disabled="model?.vision.running || visionTesting || visionSaving"
+              @update:model-value="visionConfig.apiKey = ''"
             />
           </UFormField>
           <UFormField label="模型名称" name="vision-model" required>
@@ -336,26 +308,33 @@ async function pauseVision() {
           <UFormField
             label="API Key"
             name="vision-key"
-            description="密钥仅本次启动有效，不写入磁盘。本机免密服务可留空。"
+            description="保存在本机资料库，未加密。留空并保存可清除密钥。"
           >
             <UInput
-              v-model="visionKey"
+              v-model="visionConfig.apiKey"
               class="w-full"
-              type="password"
+              :type="showVisionKey ? 'text' : 'password'"
               autocomplete="off"
-              :placeholder="vision?.hasApiKey ? '已设置，留空保留' : '输入 API Key'"
-              :disabled="clearVisionKey || model?.vision.running || visionTesting || visionSaving"
-            />
+              placeholder="输入 API Key，本机免密服务可留空"
+              :disabled="model?.vision.running || visionTesting || visionSaving"
+            >
+              <template #trailing>
+                <UButton
+                  type="button"
+                  color="neutral"
+                  variant="link"
+                  size="sm"
+                  :icon="showVisionKey ? 'i-lucide-eye-off' : 'i-lucide-eye'"
+                  :aria-label="showVisionKey ? '隐藏 API Key' : '显示 API Key'"
+                  :aria-pressed="showVisionKey"
+                  @click="showVisionKey = !showVisionKey"
+                />
+              </template>
+            </UInput>
           </UFormField>
-          <UCheckbox
-            v-if="vision?.hasApiKey"
-            v-model="clearVisionKey"
-            label="清除已保存的会话密钥"
-            :disabled="model?.vision.running || visionTesting || visionSaving"
-          />
           <UFormField
             label="导入后自动生成描述"
-            description="仅自动处理新导入的图片。已有图片可用下方批量生成。"
+            description="仅自动处理新导入的图片。已有图片可在任务管理中生成。"
             orientation="horizontal"
           >
             <USwitch
@@ -396,46 +375,6 @@ async function pauseVision() {
           variant="subtle"
           :description="visionTestResult"
         />
-        <div class="space-y-3 border-t border-default pt-4">
-          <div v-if="model?.vision.running" class="space-y-3">
-            <div class="flex justify-between gap-3 text-xs text-muted">
-              <span>{{ model.vision.message }}</span>
-              <span>{{ model.vision.done }} / {{ model.vision.total }}</span>
-            </div>
-            <UProgress
-              :model-value="model.vision.done"
-              :max="Math.max(1, model.vision.total)"
-              aria-label="图片理解进度"
-            />
-            <UButton variant="soft" size="sm" icon="i-lucide-pause" @click="pauseVision()">
-              暂停图片理解
-            </UButton>
-          </div>
-          <UButton
-            v-else
-            icon="i-lucide-sparkles"
-            :disabled="
-              !vision?.active || visionDirty || visionSaving || visionTesting || !assetCount
-            "
-            @click="emit('describe')"
-          >
-            生成缺失描述 / 继续队列
-          </UButton>
-          <p
-            v-if="model?.vision.message && !model.vision.running"
-            role="status"
-            class="text-xs text-muted"
-          >
-            {{ model.vision.message }}
-          </p>
-          <UAlert
-            v-if="model?.vision.error"
-            role="alert"
-            color="error"
-            variant="subtle"
-            :description="model.vision.error"
-          />
-        </div>
       </div>
     </template>
   </UModal>

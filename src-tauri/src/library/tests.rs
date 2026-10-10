@@ -1,6 +1,136 @@
 use super::*;
 
 #[test]
+fn clearing_indexes_preserves_text_and_waits_for_explicit_rebuild() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("library");
+    let mut library = Library::open(&root)?;
+    for index in 0..2 {
+        let path = directory.path().join(format!("{index}.png"));
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([index, 0, 0, 255])).save(&path)?;
+        library.import_files(&[path.to_string_lossy().into_owned()], None);
+    }
+    for asset in library.assets()? {
+        library.save_asset(&asset.id, "我的描述", true, &[])?;
+        library.update_ocr(&asset.id, "收到")?;
+        library.update_vision(
+            &asset.id,
+            &crate::vision::Description {
+                text: "角色敬礼".into(),
+                model: "test".into(),
+            },
+        )?;
+        library.put_embedding(
+            &asset.id,
+            &Library::search_text(&library.asset(&asset.id)?),
+            &[1.0, 0.0],
+        )?;
+    }
+    let assets = library.assets()?;
+    assert_eq!(library.clear_text(TaskKind::Index, None)?, 2);
+    for asset in &assets {
+        // A result already in flight must not restore the cleared vector.
+        library.put_embedding(&asset.id, &Library::search_text(asset), &[1.0, 0.0])?;
+        let current = library.asset(&asset.id)?;
+        assert_eq!(current.description, asset.description);
+        assert_eq!(current.ocr_text, asset.ocr_text);
+        assert_eq!(current.ai_description, asset.ai_description);
+        assert!(current.favorite && Path::new(&current.path).is_file());
+        library.update_ocr(&asset.id, "收到新的文字")?;
+        library.update_vision(
+            &asset.id,
+            &crate::vision::Description {
+                text: "角色正在敬礼".into(),
+                model: "test".into(),
+            },
+        )?;
+        library.save_asset(&asset.id, "修改后的描述", true, &[])?;
+    }
+    assert!(library
+        .search("salute", "semantic", None, Some(&[1.0, 0.0]))?
+        .is_empty());
+    assert_eq!(library.search("敬礼", "keyword", None, None)?.len(), 2);
+    drop(library);
+
+    let mut library = Library::open(&root)?;
+    library.queue_task(TaskKind::Index, None, true)?;
+    assert_eq!(library.task_counts(TaskKind::Index)?, (0, 0, 0, 2));
+    library.queue_task(TaskKind::Index, None, false)?;
+    assert_eq!(library.task_counts(TaskKind::Index)?, (2, 0, 0, 2));
+    for asset in library.assets()? {
+        library.put_embedding(&asset.id, &Library::search_text(&asset), &[1.0, 0.0])?;
+    }
+    assert_eq!(library.task_counts(TaskKind::Index)?, (0, 0, 2, 0));
+    Ok(())
+}
+
+#[test]
+fn clearing_generated_text_preserves_other_sources_and_retry_does_not_restore_it() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut library = Library::open(&directory.path().join("library"))?;
+    let mut ids = Vec::new();
+    for index in 0..2 {
+        let path = directory.path().join(format!("{index}.png"));
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([index, 0, 0, 255])).save(&path)?;
+        library.import_files(&[path.to_string_lossy().into_owned()], None);
+        let asset = library.assets()?.remove(0);
+        library.save_asset(&asset.id, "手写内容", true, &[])?;
+        library.update_ocr(&asset.id, "图片文字")?;
+        library.update_vision(
+            &asset.id,
+            &crate::vision::Description {
+                text: "图片描述".into(),
+                model: "test".into(),
+            },
+        )?;
+        library.put_embedding(
+            &asset.id,
+            &Library::search_text(&library.asset(&asset.id)?),
+            &[1.0, 0.0],
+        )?;
+        ids.push(asset.id);
+    }
+    for kind in [TaskKind::Ocr, TaskKind::Vision, TaskKind::Index] {
+        assert_eq!(library.task_counts(kind)?, (0, 0, 2, 0));
+    }
+    assert_eq!(library.clear_text(TaskKind::Vision, Some(&ids[0]))?, 1);
+    assert_eq!(library.task_counts(TaskKind::Vision)?, (0, 0, 1, 1));
+    assert_eq!(library.asset(&ids[1])?.ai_description, "图片描述");
+    assert_eq!(
+        library
+            .search("动作", "semantic", None, Some(&[1.0, 0.0]))?
+            .len(),
+        1
+    );
+    assert_eq!(library.clear_text(TaskKind::Ocr, None)?, 2);
+    assert!(library
+        .search("图片文字", "keyword", None, None)?
+        .is_empty());
+    assert!(library
+        .search("动作", "semantic", None, Some(&[1.0, 0.0]))?
+        .is_empty());
+    library.fail_vision(&ids[1], "HTTP 429")?;
+    assert_eq!(library.task_counts(TaskKind::Vision)?, (0, 1, 0, 2));
+    library.queue_task(TaskKind::Vision, None, true)?;
+    assert_eq!(library.asset(&ids[0])?.ai_state, "idle");
+    assert_eq!(library.asset(&ids[1])?.ai_state, "pending");
+    library.queue_task(TaskKind::Ocr, None, true)?;
+    assert_eq!(library.task_counts(TaskKind::Ocr)?, (0, 0, 0, 2));
+    for asset in library.assets()? {
+        assert_eq!(asset.description, "手写内容");
+        assert!(asset.favorite && Path::new(&asset.path).is_file());
+        assert_eq!(asset.ocr_state, "idle");
+    }
+    drop(library);
+    let library = Library::open(&directory.path().join("library"))?;
+    assert_eq!(library.asset(&ids[0])?.ai_state, "idle");
+    assert_eq!(library.task_counts(TaskKind::Vision)?, (1, 0, 0, 2));
+    assert_eq!(library.task_counts(TaskKind::Ocr)?, (0, 0, 0, 2));
+    assert_eq!(library.task_counts(TaskKind::Index)?, (2, 0, 0, 2));
+    Ok(())
+}
+
+#[test]
 fn search_ranks_valid_vectors_and_keywords_within_the_selected_group() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let mut library = Library::open(&directory.path().join("library"))?;
@@ -85,8 +215,8 @@ fn text_changes_preserve_other_sources_and_reject_stale_vectors() -> Result<()> 
         library.put_embedding(&asset.id, &source, &[1.0, 0.0])?;
     }
     assert_eq!(library.search("不想上班", "keyword", None, None)?.len(), 1);
-    library.queue_vision(None)?;
-    assert_eq!(library.vision_pending_count()?, 1);
+    library.queue_task(TaskKind::Vision, None, false)?;
+    assert_eq!(library.task_counts(TaskKind::Vision)?.0, 1);
     let description = crate::vision::Description {
         text: "女孩举手敬礼".into(),
         model: "test".into(),
@@ -104,13 +234,13 @@ fn text_changes_preserve_other_sources_and_reject_stale_vectors() -> Result<()> 
     library.put_embedding(&asset.id, &source, &[1.0, 0.0])?;
     assert_eq!(library.asset(&asset.id)?.index_state, "pending");
     library.put_embedding(&asset.id, &Library::search_text(&updated), &[0.0, 1.0])?;
-    library.queue_vision(None)?;
-    assert_eq!(library.vision_pending_count()?, 0);
-    library.queue_vision(Some(&asset.id))?;
+    library.queue_task(TaskKind::Vision, None, false)?;
+    assert_eq!(library.task_counts(TaskKind::Vision)?.0, 0);
+    library.queue_task(TaskKind::Vision, Some(&asset.id), false)?;
     library.fail_vision(&asset.id, "HTTP 429")?;
     assert_eq!(library.asset(&asset.id)?.ai_description, description.text);
-    library.queue_vision(None)?;
-    assert_eq!(library.vision_pending_count()?, 1);
+    library.queue_task(TaskKind::Vision, None, false)?;
+    assert_eq!(library.task_counts(TaskKind::Vision)?.0, 1);
     library.delete_asset(&asset.id)?;
     library.update_vision(&asset.id, &description)?;
     assert!(library.assets()?.is_empty());
@@ -203,7 +333,7 @@ fn model_changes_requeue_vectors_without_repeating_ocr() -> Result<()> {
             .added,
         1
     );
-    let asset = library.next_pending(None)?.unwrap();
+    let asset = library.next_task(TaskKind::Index, false, None)?.unwrap();
     library.update_ocr(&asset.id, "收到")?;
     library.save_asset(&asset.id, "举手敬礼", true, &[])?;
     let text = Library::search_text(&library.asset(&asset.id)?);
@@ -214,7 +344,7 @@ fn model_changes_requeue_vectors_without_repeating_ocr() -> Result<()> {
     drop(library);
 
     let mut library = Library::open(&root)?;
-    let pending = library.next_pending(None)?.unwrap();
+    let pending = library.next_task(TaskKind::Index, false, None)?.unwrap();
     assert_eq!(pending.id, asset.id);
     assert_eq!(pending.ocr_state, "ready");
     assert_eq!(pending.ocr_text, "收到");
@@ -225,7 +355,7 @@ fn model_changes_requeue_vectors_without_repeating_ocr() -> Result<()> {
         .is_empty());
     library.put_embedding(&pending.id, &text, &[0.0, 1.0])?;
     drop(library);
-    assert_eq!(Library::open(&root)?.pending_count(None)?, 0);
+    assert_eq!(Library::open(&root)?.task_counts(TaskKind::Index)?.0, 0);
     Ok(())
 }
 
@@ -250,12 +380,12 @@ fn batch_indexing_publishes_each_item_and_resumes_only_pending_work() -> Result<
     let report = library.import_files(&paths, None);
     assert_eq!(report.added, 4);
     assert_eq!(report.errors.len(), 1);
-    let first = library.next_pending(None)?.unwrap();
+    let first = library.next_task(TaskKind::Index, false, None)?.unwrap();
     assert_eq!(first.name, "meme-0");
     library.update_ocr(&first.id, "开心")?;
     let text = Library::search_text(&library.asset(&first.id)?);
     library.put_embedding(&first.id, &text, &[1.0, 0.0])?;
-    assert_eq!(library.pending_count(None)?, 3);
+    assert_eq!(library.task_counts(TaskKind::Index)?.0, 3);
     assert_eq!(
         library
             .search("happy", "semantic", None, Some(&[1.0, 0.0]))?
@@ -263,22 +393,24 @@ fn batch_indexing_publishes_each_item_and_resumes_only_pending_work() -> Result<
         1
     );
 
-    let failed = library.next_pending(None)?.unwrap();
+    let failed = library.next_task(TaskKind::Index, false, None)?.unwrap();
     library.mark_error(&failed.id, true)?;
     library.mark_error(&failed.id, false)?;
-    let next = library.next_pending(None)?.unwrap();
+    let next = library.next_task(TaskKind::Index, false, None)?.unwrap();
     assert_ne!(next.id, failed.id);
     drop(library);
 
     let mut library = Library::open(&root)?;
-    assert_eq!(library.pending_count(None)?, 2);
-    assert_eq!(library.next_pending(None)?.unwrap().id, next.id);
+    assert_eq!(library.task_counts(TaskKind::Index)?.0, 2);
+    assert_eq!(
+        library.next_task(TaskKind::Index, false, None)?.unwrap().id,
+        next.id
+    );
     assert_eq!(library.asset(&first.id)?.index_state, "ready");
     library.delete_asset(&next.id)?;
     // A job finishing after deletion must neither fail the queue nor resurrect the item.
     library.put_embedding(&next.id, &Library::search_text(&next), &[1.0, 0.0])?;
     assert!(library.find_asset(&next.id)?.is_none());
-    assert_eq!(library.pending_count(None)?, 1);
-    assert!(library.next_pending(Some(&first.id))?.is_none());
+    assert_eq!(library.task_counts(TaskKind::Index)?.0, 1);
     Ok(())
 }
