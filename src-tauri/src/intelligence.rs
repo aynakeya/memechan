@@ -281,7 +281,20 @@ impl Intelligence {
         Ok(())
     }
     pub fn unload_embedding(&mut self) {
-        self.embedding = None;
+        let Some(embedding) = self.embedding.take() else {
+            return;
+        };
+        drop(embedding);
+        // glibc can retain freed model/tokenizer allocations in worker-thread arenas.
+        // Trim only on explicit unload; normal inference keeps its allocation reuse.
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        {
+            unsafe extern "C" {
+                fn malloc_trim(pad: usize) -> std::ffi::c_int;
+            }
+            // SAFETY: glibc's thread-safe API only releases unused allocator pages.
+            unsafe { malloc_trim(0) };
+        }
     }
     pub fn recognize(&mut self, path: &Path) -> Result<String> {
         self.ensure_ocr()?;
