@@ -13,6 +13,7 @@
     "lint": "eslint . && vue-tsc --noEmit",
     "test:ui": "node --test tests/ui.test.mjs",
     "test:core": "cargo test --manifest-path src-tauri/Cargo.toml --no-default-features",
+    "setup:ort": "node scripts/setup-ort.mjs",
     "lint:rust": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
     "tauri": "tauri"
   },

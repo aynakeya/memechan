@@ -1,0 +1,26 @@
+{
+  "version": "1.28.0",
+  "ortVersion": "2.0.0-rc.13",
+  "targets": {
+    "x86_64-unknown-linux-gnu": {
+      "url": "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.28.0/x86_64-unknown-linux-gnu.tar.lzma2",
+      "sha256": "e454f710f8a49f53aa5b4ff51e3454ae1835777e431c6c35c5255ce6f205fd68"
+    },
+    "aarch64-unknown-linux-gnu": {
+      "url": "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.28.0/aarch64-unknown-linux-gnu.tar.lzma2",
+      "sha256": "06a050ab9137ccb32421d0cb49e9ccf72d9e18ab0aeb8f8d038d1b5cc844b35a"
+    },
+    "aarch64-apple-darwin": {
+      "url": "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.28.0/aarch64-apple-darwin+coreml.tar.lzma2",
+      "sha256": "6934874e2e953576d9c1db47ff1af39c62c4f4220dbe6f988e131f72879674c7"
+    },
+    "x86_64-pc-windows-msvc": {
+      "url": "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.28.0/x86_64-pc-windows-msvc+directml.tar.lzma2",
+      "sha256": "f7c654b3729cb9e5ad2a36a0c38e5b48e63bf4eed22968931aed33a0ad0b527d"
+    },
+    "aarch64-pc-windows-msvc": {
+      "url": "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.28.0/aarch64-pc-windows-msvc+directml.tar.lzma2",
+      "sha256": "56df72970baeea08295db33f15f985cd74f4d4cd00e0099c44aba1504c5d140e"
+    }
+  }
+}

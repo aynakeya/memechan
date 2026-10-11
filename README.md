@@ -36,12 +36,29 @@ sudo apt install build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1
 ```bash
 git submodule update --init --recursive
 pnpm install
+pnpm setup:ort --download
 pnpm tauri dev
 ```
 
 `vendor/paddle-ocr-rs` 是指向 [OCR fork](https://github.com/aynakeya/paddle-ocr-rs) 的 Git submodule，Cargo 通过本地路径引用其 `rapid-ocr-rs` crate。主仓库固定子模块提交，不自动跟随分支。修改 OCR 库时先在子模块中提交并推送，再在主仓库提交子模块指针；上游合并适配后，可用 `git submodule set-url vendor/paddle-ocr-rs <上游地址>` 切换来源，并在子模块中检出已合并的提交。
 
-`pnpm dev` 只打开浏览器界面预览。浏览器中明确禁用本地文件、剪贴板和模型功能，真实功能需要 Tauri 桌面窗口。第一次编译需下载 Rust 依赖和 ONNX Runtime。
+`pnpm dev` 只打开浏览器界面预览。浏览器中明确禁用本地文件、剪贴板和模型功能，真实功能需要 Tauri 桌面窗口。第一次编译仍需准备 Cargo 依赖；ONNX Runtime 必须通过下面的独立步骤提前准备，编译期间不会自动下载。
+
+ONNX Runtime 使用本地静态库，默认位置为 `.local/onnxruntime/`，已被 Git 忽略。版本、各平台下载地址和 SHA-256 固定在 `scripts/onnxruntime.json`；准备脚本仅在手动执行时运行，不挂接安装、开发或构建钩子。
+
+```bash
+# 显式联网下载，curl 强制 IPv4；显示地址并校验 SHA-256 后解压
+pnpm setup:ort --download
+
+# 使用已准备的对应平台 .tar.lzma2 压缩包，全程不联网
+pnpm setup:ort --archive /path/to/runtime.tar.lzma2
+```
+
+准备脚本需要 `xz` 和 `tar`，下载时另需 `curl`。Ubuntu / Debian 可用 `sudo apt install curl xz-utils tar` 安装；Windows 可在 Git Bash 中运行，macOS 若缺少 `xz` 需先安装。无参数执行会显示用法，不下载。默认按 `rustc` 的主机平台选择包，交叉构建时传 `--target <Rust target triple>`。目标目录已存在时停止，不覆盖已有库；升级时先移走旧目录。
+
+`.cargo/config.toml` 将 `ORT_LIB_PATH` 指向项目的 `.local/onnxruntime/`，从仓库根目录或 `src-tauri/` 运行 Cargo 均生效。也可以直接设置 `ORT_LIB_PATH` 使用其他本地目录；环境变量优先。目录中应直接包含 `libonnxruntime.a`（Linux / macOS）或 `onnxruntime.lib`（Windows），版本需与清单兼容。自备静态库无需运行准备脚本。不在清单内的平台需自行构建兼容的原生库。
+
+Linux 将 ONNX Runtime 静态链接进程序，不额外分发 `libonnxruntime.so`。Windows 清单中的包带 DirectML，构建时将同目录的 DLL 复制到可执行文件旁；分发 Windows 裸程序时也必须携带这些 DLL，安装包仍需核对资源配置。
 
 日常使用或评估性能时，可用 `pnpm tauri dev --release` 运行优化后的后端。普通开发模式也为图片处理、编解码和 SHA-256 依赖开启了优化，应用代码保留调试配置；首次编译这些依赖会更久，之后可复用编译缓存。
 
@@ -50,6 +67,8 @@ pnpm tauri dev
 ```bash
 pnpm tauri build
 ```
+
+仅生成可执行文件可用 `pnpm tauri build --no-bundle`，跳过 AppImage 等安装包工具的准备。完整离线编译还要求 pnpm、Cargo 和系统依赖已经就绪；本地 ONNX Runtime 只解决原生库自身的下载。
 
 跨平台代码和图标已准备，当前验证了 Linux 开发版本。Windows/macOS 的构建、签名和粘贴兼容性仍需在对应环境验证。ONNX Runtime 由 `ort` 按目标平台链接；发布安装包时还需核对动态运行库是否完整分发。
 
@@ -183,7 +202,7 @@ models/            本地模型
 
 资料库、API 和队列测试放在对应模块的 `tests.rs` 中；`src-tauri/tests/models.rs` 保留需要真实模型的离线集成测试。`benchmarks/embeddings/` 是选型评测资料，不属于日常测试。复制尺寸不会改变检索内容。
 
-TypeScript 保持 6.0.3，不升级到 7；当前 `@typescript-eslint` 支持范围为 `<6.1`。`Cargo.lock` 当前锁定 `ort 2.0.0-rc.13`，使用其默认分发的 ONNX Runtime 1.28.0；`rapid-ocr-rs` 子模块已适配同一版本。清单使用默认版本范围，后续通过更新锁文件升级；RC 之间的 API 变化仍需检查。Rust 的 `ort` 版本与原生 ONNX Runtime 版本分别管理，并非同一个版本号。
+TypeScript 保持 6.0.3，不升级到 7；当前 `@typescript-eslint` 支持范围为 `<6.1`。`Cargo.lock` 当前锁定 `ort 2.0.0-rc.13`，本地准备清单固定 ONNX Runtime 1.28.0；`rapid-ocr-rs` 子模块已适配同一版本。`ort` 的自动下载和下载用 TLS 功能已关闭。Cargo 依赖保持默认版本范围，升级时需同时检查原生库清单与 RC API 兼容性。Rust 的 `ort` 版本与原生 ONNX Runtime 版本分别管理，并非同一个版本号。
 
 ## 检查
 

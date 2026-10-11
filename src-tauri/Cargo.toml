@@ -33,7 +33,7 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 gif = "0.14.2"
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "rustls", "json"] }
 tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
-ort = { version = "2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "api-27", "download-binaries", "tls-rustls", "copy-dylibs"] }
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "api-27"] }
 rapid-ocr-rs = { path = "../vendor/paddle-ocr-rs", default-features = false }
 tempfile = "3.27.0"
 
