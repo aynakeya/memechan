@@ -66,7 +66,11 @@ const emit = defineEmits<{
     </div>
     <div class="space-y-5 p-4">
       <button class="detail-preview" aria-label="放大预览" @click="emit('preview')">
-        <img :src="fileUrl(asset.path)" :alt="asset.name" />
+        <img
+          :src="fileUrl(asset.animated ? asset.path : asset.thumbnail)"
+          :alt="asset.name"
+          decoding="async"
+        />
       </button>
       <div>
         <div class="flex items-center gap-2">

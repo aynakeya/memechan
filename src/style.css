@@ -124,6 +124,21 @@
   flex-wrap: wrap;
   padding: 22px 0 16px;
 }
+.selection-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-bg);
+}
 .empty-state {
   display: flex;
   flex: 1;
@@ -140,14 +155,11 @@
   position: relative;
   flex-shrink: 0;
 }
-.asset-row {
+.asset-cell {
   position: absolute;
   top: 0;
-  left: 0;
-  width: 100%;
-  display: grid;
-  gap: var(--asset-gap);
-  align-content: start;
+  left: calc((100% + var(--asset-gap)) * var(--asset-column) / var(--asset-columns));
+  width: calc((100% - (var(--asset-columns) - 1) * var(--asset-gap)) / var(--asset-columns));
 }
 .asset-grid.compact {
   --asset-min-width: 125px;
@@ -160,6 +172,7 @@
   border-radius: calc(var(--ui-radius) * 2);
   cursor: pointer;
   outline: none;
+  user-select: none;
 }
 .asset-card:hover {
   background: var(--ui-bg-muted);
@@ -193,6 +206,15 @@
   top: 8px;
   right: 8px;
 }
+.card-select {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  padding: 4px;
+  border-radius: var(--ui-radius);
+  background: var(--ui-bg);
+}
 .card-copy {
   position: absolute;
   right: 8px;
@@ -216,7 +238,7 @@
   line-height: 16px;
 }
 .add-tile {
-  align-self: start;
+  width: calc(100% - 12px);
   flex-direction: column;
   justify-content: center;
   aspect-ratio: 1;

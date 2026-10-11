@@ -99,6 +99,28 @@ async fn delete_asset(state: State<'_, Arc<AppState>>, id: String) -> CommandRes
     blocking(move || state.library.lock().unwrap().delete_asset(&id)).await
 }
 #[tauri::command]
+async fn delete_assets(state: State<'_, Arc<AppState>>, ids: Vec<String>) -> CommandResult<()> {
+    let state = Arc::clone(state.inner());
+    blocking(move || state.library.lock().unwrap().delete_assets(&ids)).await
+}
+#[tauri::command]
+async fn set_assets_group(
+    state: State<'_, Arc<AppState>>,
+    ids: Vec<String>,
+    group_id: i64,
+    add: bool,
+) -> CommandResult<()> {
+    let state = Arc::clone(state.inner());
+    blocking(move || {
+        state
+            .library
+            .lock()
+            .unwrap()
+            .set_assets_group(&ids, group_id, add)
+    })
+    .await
+}
+#[tauri::command]
 async fn save_group(
     state: State<'_, Arc<AppState>>,
     id: Option<i64>,
@@ -285,6 +307,8 @@ pub fn run() {
             pick_import,
             save_asset,
             delete_asset,
+            delete_assets,
+            set_assets_group,
             save_group,
             delete_group,
             save_settings,

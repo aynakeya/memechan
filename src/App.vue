@@ -51,6 +51,14 @@ const loading = ref(false),
   copying = ref<string | null>(null)
 const selectedId = ref<string | null>(null),
   preview = ref<Asset | null>(null)
+const selectedIds = ref(new Set<string>())
+const selectionAnchor = ref<string | null>(null)
+const multiSelect = ref(false)
+const selectionMode = computed(() => multiSelect.value || selectedIds.value.size > 1)
+const batchIds = ref<string[]>([])
+const batchGroup = ref<number>()
+const batchGroupAction = ref('add')
+const batchBusy = ref(false)
 const smallWindowMedia = window.matchMedia('(max-width: 799px)')
 const isSmallWindow = ref(smallWindowMedia.matches)
 const detailsOpen = ref(false)
@@ -63,7 +71,9 @@ const dragging = ref(false),
   compact = ref(false),
   sort = ref('newest')
 const model = ref<ModelStatus | null>(null),
-  modal = ref<'group' | 'delete' | 'deleteGroup' | 'custom' | null>(null)
+  modal = ref<'group' | 'delete' | 'deleteGroup' | 'custom' | 'batchGroup' | 'batchDelete' | null>(
+    null,
+  )
 const groupName = ref(''),
   groupColor = ref('#88966d'),
   editingGroup = ref<Group | null>(null)
@@ -102,6 +112,8 @@ const modalTitle = computed(() => {
     delete: '删除这张表情？',
     deleteGroup: '删除这个分组？',
     custom: '按尺寸复制',
+    batchGroup: `分组管理 · ${batchIds.value.length} 张`,
+    batchDelete: `删除选中的 ${batchIds.value.length} 张表情？`,
   }[modal.value]
 })
 const selected = computed(() => assets.value.find((asset) => asset.id === selectedId.value))
@@ -126,7 +138,10 @@ const scopeName = computed(
 const favorites = computed(() => assets.value.filter((asset) => asset.favorite).length)
 const ungrouped = computed(() => assets.value.filter((asset) => !asset.groups.length).length)
 const visible = computed(() => {
-  let list = [...(results.value ?? assets.value)]
+  const currentAssets = new Map(assets.value.map((asset) => [asset.id, asset]))
+  let list = results.value
+    ? results.value.flatMap((asset) => currentAssets.get(asset.id) ?? [])
+    : [...assets.value]
   if (scope.value === 'favorites') list = list.filter((asset) => asset.favorite)
   else if (scope.value === 'ungrouped') list = list.filter((asset) => !asset.groups.length)
   else if (scope.value === 'recent')
@@ -228,6 +243,12 @@ function scheduleSearch() {
   if (!searchComposing.value) searchTimer = setTimeout(runSearch, 350)
 }
 watch([query, searchMode, scope, searchComposing], scheduleSearch)
+watch([query, searchMode, scope, onlyAnimated, sort], clearSelection)
+watch(visible, (list) => {
+  const ids = new Set(list.map((asset) => asset.id))
+  selectedIds.value = new Set([...selectedIds.value].filter((id) => ids.has(id)))
+  if (selectionAnchor.value && !ids.has(selectionAnchor.value)) selectionAnchor.value = null
+})
 watch(showingDetailPage, async (open) => {
   const main = mainContent.value!
   if (open) listScrollTop = main.scrollTop
@@ -246,13 +267,75 @@ async function closeDetails() {
   detailsOpen.value = false
   await nextTick()
   mainContent.value
-    ?.querySelector<HTMLElement>('.asset-card.selected')
+    ?.querySelector<HTMLElement>('.asset-card.active')
     ?.focus({ preventScroll: true })
 }
-async function selectAsset(asset: Asset) {
-  if (selectedId.value === asset.id) return
-  if (description.value !== descriptionSaved.value && !(await saveDetails())) return
+async function activateAsset(asset: Asset) {
+  if (selectedId.value === asset.id) return true
+  if (description.value !== descriptionSaved.value && !(await saveDetails())) return false
   selectedId.value = asset.id
+  return true
+}
+async function selectAsset(asset: Asset, event?: MouseEvent, toggle = false) {
+  if (batchBusy.value || (event && event.detail > 1)) return
+  if (!(await activateAsset(asset))) return
+  const additive = event?.ctrlKey || event?.metaKey
+  const anchor = visible.value.findIndex((item) => item.id === selectionAnchor.value)
+  if (event?.shiftKey && anchor >= 0) {
+    const end = visible.value.findIndex((item) => item.id === asset.id)
+    const range = visible.value.slice(Math.min(anchor, end), Math.max(anchor, end) + 1)
+    selectedIds.value = new Set([
+      ...(additive ? selectedIds.value : []),
+      ...range.map((item) => item.id),
+    ])
+  } else {
+    const ids = new Set(additive || multiSelect.value || toggle ? selectedIds.value : [])
+    if ((additive || multiSelect.value || toggle) && ids.has(asset.id)) ids.delete(asset.id)
+    else ids.add(asset.id)
+    selectedIds.value = ids
+    selectionAnchor.value = asset.id
+  }
+}
+function clearSelection() {
+  if (selectedIds.value.size) selectedIds.value = new Set()
+  selectionAnchor.value = null
+}
+function selectAll() {
+  selectedIds.value = new Set(visible.value.map((asset) => asset.id))
+  selectionAnchor.value = visible.value[0]?.id ?? null
+}
+function toggleMultiSelect() {
+  multiSelect.value = !selectionMode.value
+  if (!multiSelect.value) clearSelection()
+}
+async function openBatch(action: 'batchGroup' | 'batchDelete') {
+  if (!selectedIds.value.size || !(await saveDetails())) return
+  batchIds.value = [...selectedIds.value]
+  batchGroup.value = groupId.value ?? groups.value[0]?.id
+  batchGroupAction.value = 'add'
+  modal.value = action
+}
+async function applyBatch() {
+  if (batchBusy.value) return
+  const deleting = modal.value === 'batchDelete'
+  if (!deleting && batchGroup.value === undefined) return
+  batchBusy.value = true
+  try {
+    if (deleting) await api.deleteAssets(batchIds.value)
+    else
+      await api.setAssetsGroup(batchIds.value, batchGroup.value!, batchGroupAction.value === 'add')
+    modal.value = null
+    notify(deleting ? `已删除 ${batchIds.value.length} 张表情` : '分组已更新')
+  } catch (error) {
+    notify(errorMessage(error), true)
+  } finally {
+    try {
+      await refreshLibrary()
+    } catch (error) {
+      notify(errorMessage(error), true)
+    }
+    batchBusy.value = false
+  }
 }
 async function saveDetails() {
   if (saving.value) return false
@@ -369,7 +452,8 @@ function assetMenu(asset: Asset): ContextMenuItem[][] {
   ]
 }
 async function contextAction(asset: Asset, custom = false) {
-  await selectAsset(asset)
+  if (selectedIds.value.has(asset.id)) await activateAsset(asset)
+  else await selectAsset(asset)
   if (custom && selectedId.value === asset.id) modal.value = 'custom'
   else if (!custom && selectedId.value === asset.id) {
     detailsOpen.value = true
@@ -484,6 +568,25 @@ async function keyboard(event: KeyboardEvent) {
     )
   )
     return
+  if (
+    (event.metaKey || event.ctrlKey) &&
+    event.key.toLowerCase() === 'a' &&
+    !showingDetailPage.value
+  ) {
+    event.preventDefault()
+    selectAll()
+    return
+  }
+  if (event.key === 'Escape' && (selectionMode.value || selectedIds.value.size)) {
+    clearSelection()
+    multiSelect.value = false
+    return
+  }
+  if (event.key === 'Delete' && selectedIds.value.size && !showingDetailPage.value) {
+    event.preventDefault()
+    await openBatch('batchDelete')
+    return
+  }
   if (selected.value && event.code === 'Space') {
     event.preventDefault()
     preview.value = selected.value
@@ -812,6 +915,16 @@ onBeforeUnmount(() => {
             />
             <UButton
               size="sm"
+              :color="selectionMode ? 'primary' : 'neutral'"
+              :variant="selectionMode ? 'soft' : 'ghost'"
+              icon="i-lucide-list-checks"
+              :aria-pressed="selectionMode"
+              @click="toggleMultiSelect"
+            >
+              多选
+            </UButton>
+            <UButton
+              size="sm"
               :color="detailsOpen ? 'primary' : 'neutral'"
               :variant="detailsOpen ? 'soft' : 'outline'"
               icon="i-lucide-panel-right"
@@ -820,6 +933,49 @@ onBeforeUnmount(() => {
               @click="selected && (detailsOpen ? closeDetails() : contextAction(selected))"
             >
               详情
+            </UButton>
+          </div>
+        </div>
+        <div v-if="selectionMode" class="selection-toolbar" role="toolbar" aria-label="批量管理">
+          <span class="text-sm font-medium" role="status">已选 {{ selectedIds.size }} 张</span>
+          <UButton
+            size="sm"
+            color="neutral"
+            variant="ghost"
+            :disabled="!visible.length"
+            @click="selectAll"
+          >
+            全选当前结果
+          </UButton>
+          <UButton
+            size="sm"
+            color="neutral"
+            variant="ghost"
+            :disabled="!selectedIds.size"
+            @click="clearSelection"
+          >
+            取消选择
+          </UButton>
+          <div class="ml-auto flex gap-2">
+            <UButton
+              size="sm"
+              color="neutral"
+              variant="outline"
+              icon="i-lucide-folder"
+              :disabled="!selectedIds.size"
+              @click="openBatch('batchGroup')"
+            >
+              批量分组
+            </UButton>
+            <UButton
+              size="sm"
+              color="neutral"
+              variant="outline"
+              icon="i-lucide-trash-2"
+              :disabled="!selectedIds.size"
+              @click="openBatch('batchDelete')"
+            >
+              删除所选
             </UButton>
           </div>
         </div>
@@ -890,6 +1046,8 @@ onBeforeUnmount(() => {
           :scroll-element="mainContent"
           :assets="visible"
           :selected-id="selectedId"
+          :selected-ids="selectedIds"
+          :multi-select="selectionMode"
           :copying="copying"
           :compact="compact"
           :importing="importing"
@@ -1039,7 +1197,8 @@ onBeforeUnmount(() => {
     <UModal
       :open="!!modal"
       :title="modalTitle"
-      :close="{ 'aria-label': '关闭弹窗' }"
+      :dismissible="!batchBusy"
+      :close="batchBusy ? false : { 'aria-label': '关闭弹窗' }"
       :ui="{ content: 'max-w-md' }"
       @update:open="
         (open) => {
@@ -1048,7 +1207,55 @@ onBeforeUnmount(() => {
       "
     >
       <template #body>
-        <form v-if="modal === 'group'" class="space-y-5" @submit.prevent="saveGroup">
+        <form v-if="modal === 'batchGroup'" class="space-y-5" @submit.prevent="applyBatch">
+          <UFormField label="操作">
+            <USelect
+              v-model="batchGroupAction"
+              class="w-full"
+              aria-label="分组操作"
+              :disabled="batchBusy"
+              :items="[
+                { label: '加入分组', value: 'add' },
+                { label: '移出分组', value: 'remove' },
+              ]"
+            />
+          </UFormField>
+          <UFormField label="分组">
+            <USelect
+              v-model="batchGroup"
+              class="w-full"
+              aria-label="目标分组"
+              :disabled="batchBusy"
+              :items="groups.map((group) => ({ label: group.name, value: group.id }))"
+              :placeholder="groups.length ? '选择分组' : '暂无分组'"
+            />
+          </UFormField>
+          <UButton
+            v-if="!groups.length"
+            color="neutral"
+            variant="outline"
+            icon="i-lucide-plus"
+            @click="openGroup()"
+          >
+            新建分组
+          </UButton>
+          <p class="text-sm text-muted">保留其他分组、描述和收藏。</p>
+          <div class="flex justify-end gap-2">
+            <UButton
+              type="button"
+              color="neutral"
+              variant="outline"
+              :disabled="batchBusy"
+              @click="modal = null"
+            >
+              取消
+            </UButton>
+            <UButton type="submit" :loading="batchBusy" :disabled="batchGroup === undefined">
+              应用
+            </UButton>
+          </div>
+        </form>
+        <form v-else-if="modal === 'group'" class="space-y-5" @submit.prevent="saveGroup">
           <UFormField label="分组名称" name="group-name" required>
             <UInput
               v-model="groupName"
@@ -1133,14 +1340,26 @@ onBeforeUnmount(() => {
         <template v-else-if="modal">
           <p class="text-sm leading-relaxed text-muted">
             {{
-              modal === 'delete'
+              modal === 'delete' || modal === 'batchDelete'
                 ? '将删除资料库中的原图、描述和索引。最初导入的来源文件不受影响。此操作无法撤销。'
                 : '只删除分组，组内的表情仍保留在「全部表情」中。'
             }}
           </p>
           <div class="mt-6 flex justify-end gap-2">
-            <UButton color="neutral" variant="outline" @click="modal = null">取消</UButton>
-            <UButton color="error" @click="modal === 'delete' ? removeAsset() : removeGroup()">
+            <UButton color="neutral" variant="outline" :disabled="batchBusy" @click="modal = null">
+              取消
+            </UButton>
+            <UButton
+              color="error"
+              :loading="batchBusy"
+              @click="
+                modal === 'batchDelete'
+                  ? applyBatch()
+                  : modal === 'delete'
+                    ? removeAsset()
+                    : removeGroup()
+              "
+            >
               确认删除
             </UButton>
           </div>

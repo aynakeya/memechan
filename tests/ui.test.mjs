@@ -168,6 +168,168 @@ desktopTest('详情开关、编辑描述、复制尺寸、预览及搜索错误�
   await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 6)
 })
 
+desktopTest('批量管理：修饰键连选、分组增减、删除确认和失败重试', async (page) => {
+  const cards = page.locator('.asset-card')
+  const names = await cards.evaluateAll((items) =>
+    items.map((item) => item.getAttribute('aria-label')),
+  )
+  await cards.nth(0).click()
+  await cards.nth(2).click({ modifiers: ['Control'] })
+  assert.equal(await page.locator('.asset-card.selected').count(), 2)
+  await cards.nth(4).click({ modifiers: ['Shift'] })
+  assert.deepEqual(
+    await page
+      .locator('.asset-card.selected')
+      .evaluateAll((items) => items.map((item) => item.getAttribute('aria-label'))),
+    names.slice(2, 5),
+  )
+  await cards.nth(5).click({ modifiers: ['Meta'] })
+  assert.equal(await page.locator('.asset-card.selected').count(), 4)
+  await cards.nth(5).click({ modifiers: ['Meta'] })
+  assert.equal(await page.locator('.asset-card.selected').count(), 3)
+
+  const before = await page.evaluate(() => window.structuredClone(window.testAssets))
+  await page.getByRole('button', { name: '批量分组', exact: true }).click()
+  const groupDialog = page.getByRole('dialog', { name: '分组管理 · 3 张', exact: true })
+  await page.evaluate(() => {
+    window.testBatchError = '测试：分组保存失败'
+  })
+  await groupDialog.getByRole('button', { name: '应用', exact: true }).click()
+  await page.getByText('测试：分组保存失败', { exact: true }).waitFor()
+  assert.equal(await groupDialog.isVisible(), true)
+  await page.evaluate(() => {
+    window.testBatchError = ''
+  })
+  await groupDialog.getByRole('button', { name: '应用', exact: true }).click()
+  await groupDialog.waitFor({ state: 'hidden' })
+  const ids = await page.evaluate(
+    () => window.testCalls.findLast((call) => call.command === 'set_assets_group').args.ids,
+  )
+  const grouped = await page.evaluate(() => window.structuredClone(window.testAssets))
+  for (let i = 0; i < grouped.length; i++) {
+    assert.deepEqual(grouped[i], {
+      ...before[i],
+      groups: ids.includes(before[i].id) ? [1] : before[i].groups,
+    })
+  }
+  await page.getByRole('button', { name: '批量分组', exact: true }).click()
+  await page.getByRole('combobox', { name: '分组操作', exact: true }).click()
+  await page.getByRole('option', { name: '移出分组', exact: true }).click()
+  await groupDialog.getByRole('button', { name: '应用', exact: true }).click()
+  await groupDialog.waitFor({ state: 'hidden' })
+  assert.equal(
+    await page.evaluate(
+      (selected) =>
+        window.testAssets
+          .filter((asset) => selected.includes(asset.id))
+          .every((asset) => asset.groups.length === 0),
+      ids,
+    ),
+    true,
+  )
+
+  await page.getByRole('button', { name: '删除所选', exact: true }).click()
+  const deleteDialog = page.getByRole('dialog', { name: '删除选中的 3 张表情？', exact: true })
+  await deleteDialog.getByRole('button', { name: '取消', exact: true }).click()
+  assert.equal(
+    await page.evaluate(
+      () => window.testCalls.filter((call) => call.command === 'delete_assets').length,
+    ),
+    0,
+  )
+  await page.getByRole('button', { name: '删除所选', exact: true }).click()
+  await deleteDialog.getByRole('button', { name: '确认删除', exact: true }).click()
+  await deleteDialog.waitFor({ state: 'hidden' })
+  await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 3)
+  assert.equal(await page.locator('.asset-card.selected').count(), 0)
+  assert.deepEqual(
+    await page.evaluate(() => window.testAssets.map((asset) => asset.id)),
+    before.filter((asset) => !ids.includes(asset.id)).map((asset) => asset.id),
+  )
+
+  await page.setViewportSize({ width: 600, height: 650 })
+  await page.getByRole('button', { name: '多选', exact: true }).click()
+  await cards.first().getByRole('checkbox').click()
+  assert.equal(await page.locator('.asset-card.selected').count(), 1)
+  await page.getByRole('button', { name: '全选当前结果', exact: true }).click()
+  assert.equal(await page.locator('.asset-card.selected').count(), 3)
+  assert.equal(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    true,
+  )
+  await page.getByRole('button', { name: '只看动图', exact: true }).click()
+  assert.equal(await page.locator('.asset-card.selected').count(), 0)
+  await page.getByRole('button', { name: '全选当前结果', exact: true }).click()
+  assert.equal(await page.locator('.asset-card.selected').count(), 1)
+  const search = page.getByLabel('搜索表情')
+  await search.fill('typing')
+  await search.press('Control+a')
+  assert.equal(await search.evaluate((input) => input.selectionEnd - input.selectionStart), 6)
+  await search.press('Delete')
+  assert.equal(await search.inputValue(), '')
+  assert.equal(await page.getByRole('dialog').count(), 0)
+})
+
+desktopTest('批量管理：虚拟列表跨屏连选及当前搜索结果全选', async (page) => {
+  await page.evaluate(() => {
+    const asset = window.testAssets[0]
+    window.testAssets.splice(
+      0,
+      window.testAssets.length,
+      ...Array.from({ length: 240 }, (_, index) => ({
+        ...asset,
+        id: `bulk-${index}`,
+        name: `bulk-${index}`,
+        createdAt: index,
+      })),
+    )
+    window.testModel.libraryRevision++
+  })
+  const main = page.locator('.main-content')
+  await page.getByRole('article', { name: 'bulk-239', exact: true }).waitFor()
+  await page.getByRole('article', { name: 'bulk-239', exact: true }).click()
+  await main.evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
+  await page.getByRole('article', { name: 'bulk-0', exact: true }).click({ modifiers: ['Shift'] })
+  await page.getByRole('status').filter({ hasText: '已选 240 张' }).waitFor()
+  assert.ok((await page.locator('.asset-card').count()) < 60)
+  await page.getByRole('button', { name: '批量分组', exact: true }).click()
+  await page
+    .getByRole('dialog', { name: '分组管理 · 240 张', exact: true })
+    .getByRole('button', { name: '应用', exact: true })
+    .click()
+  await page.waitForFunction(() =>
+    window.testCalls.some(
+      (call) => call.command === 'set_assets_group' && call.args.ids.length === 240,
+    ),
+  )
+  await page.getByRole('dialog').waitFor({ state: 'hidden' })
+  await page.evaluate(() => {
+    window.testHoldSearch = true
+  })
+  await main.evaluate((element) => {
+    element.scrollTop = 0
+  })
+  await page.getByLabel('搜索表情').fill('批量检索')
+  await page.waitForFunction(() => window.testPendingSearches.has('批量检索'))
+  await page.evaluate(() =>
+    window.testPendingSearches.get('批量检索')([window.testAssets[1], window.testAssets[9]]),
+  )
+  await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 2)
+  await page.locator('.asset-card').first().click()
+  await page.keyboard.press('Control+a')
+  await page.getByRole('status').filter({ hasText: '已选 2 张' }).waitFor()
+  await page.keyboard.press('Delete')
+  await page
+    .getByRole('dialog', { name: '删除选中的 2 张表情？', exact: true })
+    .getByRole('button', { name: '确认删除', exact: true })
+    .click()
+  await page.getByRole('dialog').waitFor({ state: 'hidden' })
+  assert.equal(await page.locator('.asset-card').count(), 0)
+  assert.equal(await page.evaluate(() => window.testAssets.length), 238)
+})
+
 desktopTest('输入与组词立即取消旧搜索，后台刷新不重复推理', async (page) => {
   await page.evaluate(() => {
     window.testHoldSearch = true
@@ -295,11 +457,21 @@ desktopTest('大资料库虚拟滚动、尺寸切换和后台刷新', async (pag
     await last.waitFor()
     assert.ok((await page.locator('.asset-card').count()) < 100)
     const layout = await page.locator('.asset-grid').evaluate((grid) => {
-      const rows = [...grid.querySelectorAll('.asset-row')].map((row) =>
-        row.getBoundingClientRect(),
+      const cards = [...grid.querySelectorAll('.asset-card')].map((card) =>
+        card.getBoundingClientRect(),
       )
       return {
-        overlap: rows.some((row, i) => i > 0 && row.top < rows[i - 1].bottom - 1),
+        overlap: cards.some((card, i) =>
+          cards
+            .slice(i + 1)
+            .some(
+              (other) =>
+                card.left < other.right - 1 &&
+                card.right > other.left + 1 &&
+                card.top < other.bottom - 1 &&
+                card.bottom > other.top + 1,
+            ),
+        ),
         overflow:
           document.querySelector('main').scrollWidth > document.querySelector('main').clientWidth,
       }

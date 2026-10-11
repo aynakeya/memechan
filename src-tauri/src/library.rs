@@ -513,13 +513,56 @@ impl Library {
         tx.commit()?;
         Ok(())
     }
-    pub fn delete_asset(&self, id: &str) -> Result<()> {
-        let asset = self.asset(id)?;
-        self.db.execute("DELETE FROM assets WHERE id=?1", [id])?;
+    pub fn set_assets_group(&mut self, ids: &[String], group: i64, add: bool) -> Result<()> {
+        let tx = self.db.transaction()?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM groups WHERE id=?1)",
+            [group],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err("分组不存在".into());
+        }
+        for id in ids {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)",
+                [id],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Err("表情不存在".into());
+            }
+            tx.execute(
+                if add {
+                    "INSERT OR IGNORE INTO asset_groups VALUES(?1,?2)"
+                } else {
+                    "DELETE FROM asset_groups WHERE asset_id=?1 AND group_id=?2"
+                },
+                params![id, group],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn delete_asset(&mut self, id: &str) -> Result<()> {
+        self.delete_assets(&[id.to_owned()])
+    }
+    pub fn delete_assets(&mut self, ids: &[String]) -> Result<()> {
+        let assets = ids
+            .iter()
+            .map(|id| self.asset(id))
+            .collect::<Result<Vec<_>>>()?;
+        let tx = self.db.transaction()?;
+        for id in ids {
+            tx.execute("DELETE FROM assets WHERE id=?1", [id])?;
+        }
+        tx.commit()?;
         // Copy artifacts remain valid for consumers that have not pasted yet.
-        for path in [&asset.path, &asset.thumbnail] {
-            if Path::new(path).exists() {
-                fs::remove_file(path)?;
+        for asset in assets {
+            for path in [&asset.path, &asset.thumbnail] {
+                if Path::new(path).exists() {
+                    fs::remove_file(path)?;
+                }
             }
         }
         Ok(())

@@ -36,6 +36,9 @@ export const api = {
   saveAsset: (id: string, description: string, favorite: boolean, groups: number[]) =>
     invoke<void>('save_asset', { id, description, favorite, groups }),
   deleteAsset: (id: string) => invoke<void>('delete_asset', { id }),
+  deleteAssets: (ids: string[]) => invoke<void>('delete_assets', { ids }),
+  setAssetsGroup: (ids: string[], groupId: number, add: boolean) =>
+    invoke<void>('set_assets_group', { ids, groupId, add }),
   saveGroup: (id: number | null, name: string, color: string) =>
     invoke<Group>('save_group', { id, name, color }),
   deleteGroup: (id: number) => invoke<void>('delete_group', { id }),

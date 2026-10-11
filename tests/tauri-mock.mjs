@@ -91,7 +91,14 @@ mockIPC(
         JSON.stringify({
           revision: window.testModel.libraryRevision,
           assets,
-          groups: [{ id: 1, name: '打工日常', color: '#88966d', count: 3 }],
+          groups: [
+            {
+              id: 1,
+              name: '打工日常',
+              color: '#88966d',
+              count: assets.filter((asset) => asset.groups.includes(1)).length,
+            },
+          ],
           settings,
         }),
       )
@@ -179,6 +186,24 @@ mockIPC(
         assets.find((a) => a.id === args.id),
         { description: args.description, favorite: args.favorite, groups: args.groups },
       )
+    }
+    if (command === 'set_assets_group') {
+      if (window.testBatchError) throw new Error(window.testBatchError)
+      for (const asset of assets.filter((asset) => args.ids.includes(asset.id))) {
+        asset.groups = args.add
+          ? [...new Set([...asset.groups, args.groupId])]
+          : asset.groups.filter((id) => id !== args.groupId)
+      }
+      window.testModel.libraryRevision++
+      return
+    }
+    if (command === 'delete_assets') {
+      if (window.testBatchError) throw new Error(window.testBatchError)
+      for (let index = assets.length - 1; index >= 0; index--) {
+        if (args.ids.includes(assets[index].id)) assets.splice(index, 1)
+      }
+      window.testModel.libraryRevision++
+      return
     }
     if (command === 'copy_asset') return '已复制图片'
     if (command === 'copy_cache_status') return window.structuredClone(window.testCopyCache)

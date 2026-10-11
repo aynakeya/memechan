@@ -248,6 +248,73 @@ fn text_changes_preserve_other_sources_and_reject_stale_vectors() -> Result<()> 
 }
 
 #[test]
+fn batch_management_preserves_metadata_and_deletes_only_selected_assets() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut library = Library::open(&directory.path().join("library"))?;
+    let first = library.save_group(None, "动作", "#88966d")?.id;
+    let second = library.save_group(None, "日常", "#88966d")?.id;
+    let sources: Vec<_> = (0..3)
+        .map(|index| directory.path().join(format!("{index}.png")))
+        .collect();
+    for (index, source) in sources.iter().enumerate() {
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([index as u8, 0, 0, 255])).save(source)?;
+        assert_eq!(
+            library
+                .import_files(&[source.to_string_lossy().into_owned()], None)
+                .added,
+            1
+        );
+    }
+    let assets = library.assets()?;
+    let ids: Vec<_> = assets[..2].iter().map(|asset| asset.id.clone()).collect();
+    for (index, asset) in assets.iter().enumerate() {
+        library.save_asset(&asset.id, &format!("描述 {index}"), index == 0, &[first])?;
+        library.update_ocr(&asset.id, "敬礼")?;
+        library.put_embedding(
+            &asset.id,
+            &Library::search_text(&library.asset(&asset.id)?),
+            &[1.0, 0.0],
+        )?;
+    }
+    let invalid_ids = vec![ids[0].clone(), "missing".into()];
+    assert!(library
+        .set_assets_group(&invalid_ids, second, true)
+        .is_err());
+    assert_eq!(library.asset(&ids[0])?.groups, vec![first]);
+    library.set_assets_group(&ids, second, true)?;
+    library.set_assets_group(&ids, second, true)?;
+    library.set_assets_group(&ids, first, false)?;
+    for (index, id) in ids.iter().enumerate() {
+        let asset = library.asset(id)?;
+        assert_eq!(asset.groups, vec![second]);
+        assert_eq!(asset.description, format!("描述 {index}"));
+        assert_eq!(asset.favorite, index == 0);
+        assert_eq!(asset.ocr_text, "敬礼");
+        assert_eq!(asset.index_state, "ready");
+    }
+    assert_eq!(library.asset(&assets[2].id)?.groups, vec![first]);
+    assert!(library.delete_assets(&invalid_ids).is_err());
+    assert_eq!(library.assets()?.len(), 3);
+    assert!(assets.iter().all(|asset| Path::new(&asset.path).exists()));
+    let copy = library.root.join("copies").join("clipboard.png");
+    fs::write(&copy, b"clipboard")?;
+    library.delete_assets(&ids)?;
+    assert_eq!(library.assets()?.len(), 1);
+    assert!(assets[..2]
+        .iter()
+        .all(|asset| !Path::new(&asset.path).exists() && !Path::new(&asset.thumbnail).exists()));
+    assert!(Path::new(&assets[2].path).exists());
+    assert!(copy.exists() && sources.iter().all(|source| source.exists()));
+    assert_eq!(
+        library
+            .search("salute", "semantic", None, Some(&[1.0, 0.0]))?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[test]
 fn importing_duplicates_preserves_membership_and_group_deletion_keeps_files() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let source = directory.path().join("smile.png");
