@@ -10,8 +10,10 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tauri::{Manager, State};
+use tauri::{Manager, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
+mod tray;
+
 type CommandResult<T> = std::result::Result<T, String>;
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T> + Send + 'static,
@@ -304,7 +306,18 @@ pub fn run() {
                 .auto_index()
                 .map_err(|error| error as Box<dyn std::error::Error>)?;
             app.manage(state);
+            tray::setup(app)?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    match window.hide() {
+                        Ok(()) => api.prevent_close(),
+                        Err(error) => eprintln!("收起到托盘失败：{error}"),
+                    }
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             snapshot,
@@ -331,6 +344,12 @@ pub fn run() {
             save_vision_config,
             test_vision
         ])
-        .run(tauri::generate_context!())
-        .expect("无法启动 Memechan");
+        .build(tauri::generate_context!())
+        .expect("无法启动 Memechan")
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                tray::show_main_window(_app);
+            }
+        });
 }

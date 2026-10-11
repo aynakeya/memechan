@@ -17,6 +17,7 @@
 - 可配置 OpenAI 兼容的图片理解 API，支持单张生成、批量队列、暂停和可选的导入后自动生成。描述独立保存，不覆盖手写内容。
 - 模型仅从本地文件导入；预置 OCR / 0.6B 使用固定 SHA-256，自导出模型按文件清单校验；本地保存索引，可暂停任务、重试失败项目。
 - 任务管理集中显示 OCR、图片理解和文字索引的进度，分别暂停、继续及重试失败项。OCR 文字和 API 图片描述可逐张或全库清除，保留手写描述与原图。
+- 系统托盘支持显示、隐藏窗口和退出；关闭主窗口后收起到托盘，后台任务继续运行。
 
 未配置图片理解 API 时，没有文字且没有自定义描述的图片只能依赖文件名检索。云同步和直接用图片向量检索暂未实现。
 
@@ -27,7 +28,7 @@
 Ubuntu / Debian 先安装开发包：
 
 ```bash
-sudo apt install build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libxdo-dev patchelf
+sudo apt install build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libxdo-dev libayatana-appindicator3-1 patchelf
 ```
 
 然后：
@@ -55,6 +56,8 @@ pnpm tauri build
 ## 使用
 
 把图片拖入窗口即可添加；打开分组后导入，会加入该分组。单击选中，工具栏「详情」开关查看描述、OCR 和所属分组；双击复制，空格预览，Ctrl / Cmd K 搜索。描述可以显式保存，也会在切换所选图片时保存。
+
+关闭主窗口只收起到托盘。通过托盘菜单「显示窗口」恢复，通过「退出 Memechan」彻底退出；Windows / macOS 也可左键点击托盘图标恢复。Linux 需要支持 AppIndicator 的桌面托盘，GNOME 通常需要启用相应扩展；Linux 上使用托盘菜单操作。
 
 网格按可见行虚拟渲染，支持窗口缩放和紧凑模式。后台轮询只在资料库数据变化后刷新卡片，单纯的任务进度变化不再重新加载资料库。当前元数据仍通过完整快照读取，尚未做数据库分页。
 

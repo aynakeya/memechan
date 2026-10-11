@@ -21,7 +21,7 @@ desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:clipb
 tauri-build = { version = "2.7.1", optional = true, features = [] }
 
 [dependencies]
-tauri = { version = "2.12.1", optional = true, features = ["protocol-asset"] }
+tauri = { version = "2.12.1", optional = true, features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-dialog = { version = "2.8.1", optional = true }
 clipboard-rs = { version = "0.3.5", optional = true, features = ["wayland"] }
 rusqlite = { version = "0.40.2", features = ["bundled", "fallible_uint"] }
