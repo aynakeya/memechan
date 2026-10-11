@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+fn committed_changes_are_readable_while_the_writer_is_occupied() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let state = Arc::new(AppState::new(directory.path())?);
+    let before = state.model_status()?.library_revision;
+    let mut writer = state.library_write.lock().unwrap();
+    let path = directory.path().join("敬礼.png");
+    image::RgbaImage::new(4, 4).save(&path)?;
+    assert_eq!(
+        writer
+            .import_files(&[path.to_string_lossy().into_owned()], None)
+            .added,
+        1
+    );
+
+    let (send, receive) = std::sync::mpsc::channel();
+    let reader = Arc::clone(&state);
+    let thread = std::thread::spawn(move || {
+        send.send((|| -> Result<_> {
+            let status = reader.model_status()?;
+            let snapshot = reader.library_read.lock().unwrap().snapshot()?;
+            let found = reader.search(reader.invalidate_searches(), "敬礼", "keyword", None)?;
+            Ok((status.library_revision, snapshot, found))
+        })())
+        .unwrap();
+    });
+    let result = receive.recv_timeout(std::time::Duration::from_secs(5));
+    drop(writer);
+    thread.join().unwrap();
+    let (revision, snapshot, found) = result??;
+    assert_ne!(revision, before);
+    assert_eq!(snapshot.revision, revision);
+    assert_eq!(snapshot.assets.len(), 1);
+    assert_eq!(found.unwrap().len(), 1);
+    assert_eq!(state.model_status()?.library_revision, revision);
+    // Runtime progress must stay live when database counts are cached.
+    {
+        let mut local = state.local.lock().unwrap();
+        local.ocr.running = true;
+        local.ocr.paused = true;
+        local.ocr.done = 3;
+        local.ocr.message = "正在识别".into();
+    }
+    let status = state.model_status()?;
+    assert_eq!(status.library_revision, revision);
+    assert!(status.ocr.running && status.ocr.paused);
+    assert_eq!(status.ocr.done, 3);
+    assert_eq!(status.ocr.message, "正在识别");
+    assert_eq!(status.ocr.pending, 1);
+    assert_eq!(status.index.pending, 1);
+    assert_eq!(status.vision.incomplete, 1);
+    // The read connection must also reject accidental writes at the database boundary.
+    assert!(state
+        .library_read
+        .lock()
+        .unwrap()
+        .save_group(None, "禁止写入", "#88966d")
+        .is_err());
+    Ok(())
+}
+
+#[test]
 fn invalid_embedding_manifest_does_not_block_library_operations() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("library");
@@ -10,7 +71,7 @@ fn invalid_embedding_manifest_does_not_block_library_operations() -> Result<()> 
     let state = Arc::new(AppState::new(&root)?);
     assert_eq!(state.import_paths(&paths, None)?.added, 1);
     let id = {
-        let mut library = state.library.lock().unwrap();
+        let mut library = state.library_write.lock().unwrap();
         let asset = library.assets()?.remove(0);
         library.set_embedding_version("installed-model-fingerprint")?;
         library.put_embedding(&asset.id, &Library::search_text(&asset), &[1.0, 0.0])?;
@@ -64,11 +125,11 @@ fn invalid_embedding_manifest_does_not_block_library_operations() -> Result<()> 
             copy_size: 320,
             ..Default::default()
         })?;
-        let library = state.library.lock().unwrap();
+        let library = state.library_read.lock().unwrap();
         assert_eq!(library.snapshot()?.settings.copy_size, 320);
         let asset = library.asset(&id)?;
         assert_eq!(asset.index_state, "ready");
-        assert_eq!(library.embedding_version, "installed-model-fingerprint");
+        assert_eq!(library.embedding_version()?, "installed-model-fingerprint");
         assert!(crate::media::prepare_copy(&asset, &root, 0, false)?.is_file());
     }
     Ok(())
@@ -114,10 +175,15 @@ fn vision_queue_pauses_retries_and_discards_cleared_inflight_results() -> Result
     }
     state.import_paths(&paths[..2], None)?;
     started_rx.recv_timeout(std::time::Duration::from_secs(10))?;
-    let first = state.library.lock().unwrap().next_vision(None)?.unwrap();
+    let first = state
+        .library_read
+        .lock()
+        .unwrap()
+        .next_vision(None)?
+        .unwrap();
     // HTTP is in flight; editing must still work and must survive the response.
     state
-        .library
+        .library_write
         .lock()
         .unwrap()
         .save_asset(&first.id, "我的敬礼描述", true, &[])?;
@@ -127,12 +193,17 @@ fn vision_queue_pauses_retries_and_discards_cleared_inflight_results() -> Result
     wait_until(|| !state.model_status().unwrap().vision.running)?;
     assert_eq!(state.model_status().unwrap().vision.done, 1);
     assert_eq!(
-        state.library.lock().unwrap().asset(&first.id)?.description,
+        state
+            .library_read
+            .lock()
+            .unwrap()
+            .asset(&first.id)?
+            .description,
         "我的敬礼描述"
     );
     assert_eq!(
         state
-            .library
+            .library_read
             .lock()
             .unwrap()
             .search("敬礼", "keyword", None, None)?
@@ -143,7 +214,7 @@ fn vision_queue_pauses_retries_and_discards_cleared_inflight_results() -> Result
     assert!(!state.model_status().unwrap().vision.running);
     assert_eq!(
         state
-            .library
+            .library_read
             .lock()
             .unwrap()
             .task_counts(TaskKind::Vision)?
@@ -165,7 +236,7 @@ fn vision_queue_pauses_retries_and_discards_cleared_inflight_results() -> Result
     wait_until(|| !state.model_status().unwrap().vision.running)?;
     assert_eq!(
         state
-            .library
+            .library_read
             .lock()
             .unwrap()
             .task_counts(TaskKind::Vision)?
@@ -173,7 +244,7 @@ fn vision_queue_pauses_retries_and_discards_cleared_inflight_results() -> Result
         0
     );
     assert!(state
-        .library
+        .library_read
         .lock()
         .unwrap()
         .assets()?
@@ -255,7 +326,7 @@ fn indexing_and_search_work_with_ocr_disabled_and_only_qwen_installed() -> Resul
     image::RgbaImage::new(4, 4).save(&path)?;
     state.import_paths(&[path.to_string_lossy().into_owned()], None)?;
     let id = {
-        let mut library = state.library.lock().unwrap();
+        let mut library = state.library_write.lock().unwrap();
         let asset = library.assets()?.remove(0);
         library.save_asset(&asset.id, "开心敬礼", false, &[])?;
         asset.id
@@ -268,7 +339,7 @@ fn indexing_and_search_work_with_ocr_disabled_and_only_qwen_installed() -> Resul
     let status = state.model_status()?;
     assert!(status.ready && !status.ocr_ready && !status.ocr_enabled);
     assert!(status.index.error.is_none());
-    let asset = state.library.lock().unwrap().asset(&id)?;
+    let asset = state.library_read.lock().unwrap().asset(&id)?;
     assert_eq!(asset.ocr_state, "pending");
     assert_eq!(asset.index_state, "ready");
     assert_eq!(status.index.pending, 1);
@@ -379,7 +450,7 @@ fn bulk_import_joins_active_worker_and_resumes_after_restart() -> Result<()> {
     }
     assert_eq!(state.import_paths(&paths[..1], None)?.added, 1);
     let first = state
-        .library
+        .library_read
         .lock()
         .unwrap()
         .next_task(TaskKind::Index, false, None)?
@@ -389,7 +460,10 @@ fn bulk_import_joins_active_worker_and_resumes_after_restart() -> Result<()> {
     state.control_task(TaskKind::Ocr, TaskAction::Generate, Some(&first.id))?;
     state.control_task(TaskKind::Index, TaskAction::Resume, None)?;
     assert_eq!(state.import_paths(&paths[1..], None)?.added, 31);
-    assert_eq!(state.library.lock().unwrap().snapshot()?.assets.len(), 32);
+    assert_eq!(
+        state.library_read.lock().unwrap().snapshot()?.assets.len(),
+        32
+    );
     wait_until(|| state.local.lock().unwrap().ocr.message == first.name)?;
     state.clear_text(TaskKind::Ocr, Some(&first.id))?;
     drop(inference);
@@ -398,11 +472,11 @@ fn bulk_import_joins_active_worker_and_resumes_after_restart() -> Result<()> {
     state.control_task(TaskKind::Ocr, TaskAction::Pause, None)?;
     state.control_task(TaskKind::Index, TaskAction::Pause, None)?;
     wait_until(|| !state.local.lock().unwrap().worker_running)?;
-    let ready = state.library.lock().unwrap().asset(&first.id)?;
+    let ready = state.library_read.lock().unwrap().asset(&first.id)?;
     assert_eq!(ready.index_state, "ready");
     assert_eq!(ready.ocr_state, "idle");
     let remaining = state
-        .library
+        .library_read
         .lock()
         .unwrap()
         .task_counts(TaskKind::Index)?
@@ -419,7 +493,7 @@ fn bulk_import_joins_active_worker_and_resumes_after_restart() -> Result<()> {
     );
     assert!(!state.local.lock().unwrap().worker_running);
     let broken = state
-        .library
+        .library_read
         .lock()
         .unwrap()
         .assets()?
@@ -436,7 +510,7 @@ fn bulk_import_joins_active_worker_and_resumes_after_restart() -> Result<()> {
     });
     restarted.auto_index()?;
     wait_until(|| !restarted.local.lock().unwrap().worker_running)?;
-    let library = restarted.library.lock().unwrap();
+    let library = restarted.library_read.lock().unwrap();
     assert_eq!(library.task_counts(TaskKind::Index)?.0, 0);
     assert_eq!(library.asset(&broken.id)?.ocr_state, "error");
     assert_eq!(
@@ -466,7 +540,7 @@ fn bulk_import_joins_active_worker_and_resumes_after_restart() -> Result<()> {
     wait_until(|| !restarted.local.lock().unwrap().worker_running)?;
     assert_eq!(
         restarted
-            .library
+            .library_read
             .lock()
             .unwrap()
             .task_counts(TaskKind::Index)?

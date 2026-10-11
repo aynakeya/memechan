@@ -174,11 +174,6 @@ async function refresh() {
   if (selectedId.value && !assets.value.some((asset) => asset.id === selectedId.value))
     selectedId.value = null
 }
-async function refreshLibrary() {
-  await refresh()
-  // An in-flight search reads the latest library after embedding the query.
-  if (query.value.trim() && !searching.value) scheduleSearch()
-}
 async function refreshModels() {
   if (refreshingModels) return
   refreshingModels = true
@@ -186,7 +181,7 @@ async function refreshModels() {
     const previous = model.value
     model.value = await api.models()
     if (previous) {
-      if (model.value.libraryRevision !== libraryRevision) await refreshLibrary()
+      if (model.value.libraryRevision !== libraryRevision) await refresh()
       for (const key of ['job', 'ocr', 'index', 'vision'] as const) {
         const after = model.value[key]
         if (previous[key].running && !after.running && after.error) notify(after.error, true)
@@ -330,7 +325,7 @@ async function applyBatch() {
     notify(errorMessage(error), true)
   } finally {
     try {
-      await refreshLibrary()
+      await refresh()
     } catch (error) {
       notify(errorMessage(error), true)
     }
@@ -346,7 +341,7 @@ async function saveDetails() {
   try {
     await api.saveAsset(asset.id, text, asset.favorite, asset.groups)
     if (asset.id === selectedId.value) descriptionSaved.value = text
-    await refreshLibrary()
+    await refresh()
     return description.value === descriptionSaved.value
   } catch (error) {
     notify(errorMessage(error), true)
@@ -362,7 +357,7 @@ async function favorite(asset: Asset) {
   try {
     await api.saveAsset(asset.id, text, !asset.favorite, asset.groups)
     if (asset.id === selectedId.value) descriptionSaved.value = text
-    await refreshLibrary()
+    await refresh()
   } catch (error) {
     notify(errorMessage(error), true)
   } finally {
@@ -380,7 +375,7 @@ async function toggleGroup(id: number) {
   try {
     await api.saveAsset(asset.id, text, asset.favorite, membership)
     if (asset.id === selectedId.value) descriptionSaved.value = text
-    await refreshLibrary()
+    await refresh()
   } catch (error) {
     notify(errorMessage(error), true)
   } finally {
@@ -399,7 +394,7 @@ async function importAssets(paths?: string[]) {
         `已添加 ${report.added} 张表情${report.duplicates ? `，${report.duplicates} 张重复图片已合并` : ''}`,
       )
     if (report.errors.length) notify(report.errors.join('\n'), true)
-    await refreshLibrary()
+    await refresh()
   } catch (error) {
     notify(errorMessage(error), true)
   } finally {
@@ -497,7 +492,7 @@ async function removeAsset() {
     await api.deleteAsset(selected.value.id)
     modal.value = null
     selectedId.value = null
-    await refreshLibrary()
+    await refresh()
     notify('已从资料库删除')
   } catch (error) {
     notify(errorMessage(error), true)
@@ -506,7 +501,7 @@ async function removeAsset() {
 async function generate(kind: TaskKind, id: string) {
   try {
     await api.task(kind, 'generate', id)
-    await refreshLibrary()
+    await refresh()
     await refreshModels()
   } catch (error) {
     notify(errorMessage(error), true)
@@ -528,7 +523,7 @@ async function clearText() {
   try {
     await api.clearText(clearTarget.value.kind, clearTarget.value.id)
     clearTarget.value = null
-    await refreshLibrary()
+    await refresh()
     await refreshModels()
     notify('已清除')
   } catch (error) {
@@ -825,6 +820,7 @@ onBeforeUnmount(() => {
             :ui="{ trailing: 'pr-2' }"
             @compositionstart="searchComposing = true"
             @compositionend="searchComposing = false"
+            @keydown.enter="!searchComposing && !$event.isComposing && scheduleSearch()"
           >
             <template #trailing>
               <UButton

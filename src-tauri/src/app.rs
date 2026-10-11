@@ -16,7 +16,12 @@ use std::{
 };
 
 pub struct AppState {
-    pub(crate) library: Mutex<Library>,
+    // Independent connections to the same WAL database. Never hold both DB locks together.
+    // Read lock: short queries and row materialization only. Release before file/network I/O,
+    // model loading/inference, or search ranking. Keep read transactions short.
+    pub(crate) library_read: Mutex<Library>,
+    // Read-modify-write operations use this connection for both validation and mutation.
+    pub(crate) library_write: Mutex<Library>,
     models: PathBuf,
     intelligence: Mutex<Option<Intelligence>>,
     inference_scheduler: InferenceScheduler,
@@ -99,7 +104,8 @@ impl AppState {
             .map(VisionClient::new)
             .transpose()?;
         Ok(Self {
-            library: Mutex::new(library),
+            library_read: Mutex::new(Library::open_read_only(root)?),
+            library_write: Mutex::new(library),
             models: root.join("models"),
             intelligence: Mutex::new(None),
             inference_scheduler: InferenceScheduler::default(),
@@ -136,9 +142,14 @@ impl AppState {
         work: impl FnOnce(&mut Intelligence) -> Result<T>,
     ) -> Result<T> {
         let mut models = self.intelligence.lock().unwrap();
-        let library = self.library.lock().unwrap();
+        let (model, database_version) = {
+            let library = self.library_read.lock().unwrap();
+            (
+                library.settings()?.embedding_model,
+                library.embedding_version()?,
+            )
+        };
         if models.is_none() {
-            let model = library.settings()?.embedding_model;
             *models = Some(Intelligence::load(&self.models, model)?);
         }
         if kind == TaskKind::Index {
@@ -148,18 +159,22 @@ impl AppState {
                 .version
                 .as_ref()
                 .map_err(|error| error.clone())?;
-            if version != &library.embedding_version {
+            if version != &database_version {
                 return Err("模型版本正在切换，请等待模型导入完成".into());
             }
         }
-        drop(library);
         work(models.as_mut().unwrap())
     }
     pub fn save_settings(self: &Arc<Self>, settings: Settings) -> Result<()> {
         {
             let install = self.job.lock().unwrap();
             let mut local = self.local.lock().unwrap();
-            let changed_model = self.library.lock().unwrap().settings()?.embedding_model
+            let changed_model = self
+                .library_write
+                .lock()
+                .unwrap()
+                .settings()?
+                .embedding_model
                 != settings.embedding_model;
             if changed_model {
                 if install.running || local.worker_running {
@@ -167,7 +182,7 @@ impl AppState {
                 }
                 // Serialize the switch with search, so query vectors cannot cross models.
                 let mut models = self.intelligence.lock().unwrap();
-                let mut library = self.library.lock().unwrap();
+                let mut library = self.library_write.lock().unwrap();
                 library.save_settings(settings)?;
                 let error = Self::sync_model_version(&mut library)?;
                 *models = None;
@@ -178,13 +193,13 @@ impl AppState {
                 };
                 local.index_only = None;
             } else {
-                self.library.lock().unwrap().save_settings(settings)?;
+                self.library_write.lock().unwrap().save_settings(settings)?;
             }
         }
         self.auto_index()
     }
     pub fn clear_text(self: &Arc<Self>, kind: TaskKind, id: Option<&str>) -> Result<usize> {
-        let changed = self.library.lock().unwrap().clear_text(kind, id)?;
+        let changed = self.library_write.lock().unwrap().clear_text(kind, id)?;
         self.auto_index()?;
         Ok(changed)
     }
@@ -213,7 +228,7 @@ impl AppState {
             if job.running && matches!(action, TaskAction::Retry | TaskAction::Generate) {
                 return Err("请先暂停当前任务，等待当前图片处理完成".into());
             }
-            let library = self.library.lock().unwrap();
+            let library = self.library_write.lock().unwrap();
             if kind == TaskKind::Ocr && !library.settings()?.ocr_enabled {
                 return Err("请先在偏好设置中启用本地 OCR".into());
             }
@@ -252,8 +267,7 @@ impl AppState {
                 return Ok(());
             }
             let mut local = self.local.lock().unwrap();
-            let library = self.library.lock().unwrap();
-            let settings = library.settings()?;
+            let settings = self.library_read.lock().unwrap().settings()?;
             for (kind, enabled, ready) in [
                 (
                     TaskKind::Ocr,
@@ -269,7 +283,7 @@ impl AppState {
             ] {
                 let job = local.job(kind);
                 if enabled && ready && !job.paused && !job.running {
-                    let (pending, ..) = library.task_counts(kind)?;
+                    let (pending, ..) = self.library_read.lock().unwrap().task_counts(kind)?;
                     if pending > 0 {
                         *job = JobStatus {
                             running: true,
@@ -311,7 +325,7 @@ impl AppState {
             let _permit = self.inference_scheduler.acquire_background_permit();
             let (kind, asset) = {
                 let mut local = self.local.lock().unwrap();
-                let library = self.library.lock().unwrap();
+                let library = self.library_read.lock().unwrap();
                 let settings = library.settings()?;
                 if local.ocr.paused || !settings.ocr_enabled {
                     local.ocr.running = false;
@@ -371,7 +385,7 @@ impl AppState {
             let error = if kind == TaskKind::Ocr {
                 let result =
                     self.with_models(kind, |models| models.recognize(Path::new(&asset.path)));
-                let library = self.library.lock().unwrap();
+                let library = self.library_write.lock().unwrap();
                 // Clearing text or disabling OCR during inference discards its result.
                 if library.settings()?.ocr_enabled
                     && library
@@ -394,7 +408,7 @@ impl AppState {
             } else {
                 let source = Library::search_text(&asset);
                 let result = self.with_models(kind, |models| models.embed(&source, false));
-                let mut library = self.library.lock().unwrap();
+                let mut library = self.library_write.lock().unwrap();
                 match result {
                     Ok(vector) => {
                         library.put_embedding(&asset.id, &source, &vector)?;
@@ -427,7 +441,12 @@ impl AppState {
         if job.running || self.local.lock().unwrap().worker_running {
             return Err("请先暂停本地任务并等待当前图片处理完成".into());
         }
-        let model = self.library.lock().unwrap().settings()?.embedding_model;
+        let model = self
+            .library_read
+            .lock()
+            .unwrap()
+            .settings()?
+            .embedding_model;
         *job = JobStatus {
             running: true,
             message: "准备安装模型".into(),
@@ -447,10 +466,10 @@ impl AppState {
                     .and_then(|()| {
                         let mut models = state.intelligence.lock().unwrap();
                         *models = None;
-                        let mut library = state.library.lock().unwrap();
-                        let previous_version = library.embedding_version.clone();
+                        let mut library = state.library_write.lock().unwrap();
+                        let previous_version = library.embedding_version()?;
                         let model_error = Self::sync_model_version(&mut library)?;
-                        let changed_model = previous_version != library.embedding_version;
+                        let changed_model = previous_version != library.embedding_version()?;
                         drop(library);
                         drop(models);
                         if changed_model || model_error.is_some() {
@@ -524,7 +543,7 @@ impl AppState {
         if action.is_none() && (session.job.paused || !client.config.auto_describe) {
             return Ok(());
         }
-        let library = self.library.lock().unwrap();
+        let library = self.library_write.lock().unwrap();
         if matches!(action, Some(TaskAction::Generate | TaskAction::Retry)) {
             library.queue_task(TaskKind::Vision, id, action == Some(TaskAction::Retry))?;
         }
@@ -568,7 +587,7 @@ impl AppState {
                     session.job.message = "图片理解已暂停".into();
                     return Ok(());
                 }
-                let library = self.library.lock().unwrap();
+                let library = self.library_read.lock().unwrap();
                 let Some(asset) = library.next_vision(only)? else {
                     if only.is_some() && client.config.auto_describe {
                         only = None;
@@ -583,7 +602,7 @@ impl AppState {
             };
             let result = client.describe(Path::new(&asset.path));
             {
-                let library = self.library.lock().unwrap();
+                let library = self.library_write.lock().unwrap();
                 if library
                     .find_asset(&asset.id)?
                     .is_some_and(|a| a.ai_state == "pending")
@@ -619,16 +638,24 @@ impl AppState {
         }
         let result = (|| -> Result<ImportReport> {
             let mut report = ImportReport::default();
-            let root = self.library.lock().unwrap().root.clone();
+            let root = self.library_write.lock().unwrap().root.clone();
             for (index, path) in paths.iter().enumerate() {
                 let item = (|| -> Result<bool> {
                     let path = Path::new(path);
                     let (id, bytes) = read_source(path)?;
-                    if self.library.lock().unwrap().attach_duplicate(&id, group)? {
+                    if self
+                        .library_write
+                        .lock()
+                        .unwrap()
+                        .attach_duplicate(&id, group)?
+                    {
                         return Ok(false);
                     }
                     let prepared = PreparedImport::new(&root, path, id, &bytes)?;
-                    self.library.lock().unwrap().insert_import(prepared, group)
+                    self.library_write
+                        .lock()
+                        .unwrap()
+                        .insert_import(prepared, group)
                 })();
                 let added = matches!(item, Ok(true));
                 match item {
@@ -681,8 +708,9 @@ impl AppState {
         if query.chars().count() > 4000 {
             return Err("搜索内容过长".into());
         }
+        let mut embedded = None;
         if !query.trim().is_empty() && mode != "keyword" {
-            let settings = self.library.lock().unwrap().settings()?;
+            let settings = self.library_read.lock().unwrap().settings()?;
             let missing = intelligence::missing_embedding(&self.models, settings.embedding_model);
             if !missing.is_empty() {
                 if mode == "semantic" {
@@ -693,7 +721,7 @@ impl AppState {
                 else {
                     return Ok(None);
                 };
-                return self.with_models(TaskKind::Index, |models| {
+                embedded = self.with_models(TaskKind::Index, |models| {
                     // Model replacement may have kept this request waiting on the mutex.
                     if !self.inference_scheduler.is_search_current(generation) {
                         return Ok(None);
@@ -703,23 +731,41 @@ impl AppState {
                     if !self.inference_scheduler.is_search_current(generation) {
                         return Ok(None);
                     }
-                    let embedding = models.embed(query, true)?;
-                    let library = self.library.lock().unwrap();
-                    if !self.inference_scheduler.is_search_current(generation) {
-                        return Ok(None);
-                    }
-                    library
-                        .search(query, mode, group_id, Some(&embedding))
-                        .map(Some)
-                });
+                    let vector = models.embed(query, true)?;
+                    let version = models
+                        .version
+                        .as_ref()
+                        .map_err(|error| error.clone())?
+                        .clone();
+                    Ok(Some((vector, version)))
+                })?;
+                if embedded.is_none() {
+                    return Ok(None);
+                }
             }
         }
-        let library = self.library.lock().unwrap();
+        let data = {
+            let library = self.library_read.lock().unwrap();
+            if !self.inference_scheduler.is_search_current(generation) {
+                return Ok(None);
+            }
+            // Match the model that produced the query even if settings have changed since inference.
+            library.search_data(
+                group_id,
+                embedded.as_ref().map(|(_, version)| version.as_str()),
+            )?
+        };
         if !self.inference_scheduler.is_search_current(generation) {
             return Ok(None);
         }
-        library.search(query, mode, group_id, None).map(Some)
+        data.rank(
+            query,
+            mode,
+            embedded.as_ref().map(|(vector, _)| vector.as_slice()),
+        )
+        .map(Some)
     }
+
     pub fn model_status(&self) -> Result<ModelStatus> {
         let job = self.job.lock().unwrap().clone();
         let import = self.import_job.lock().unwrap().clone();
@@ -728,10 +774,13 @@ impl AppState {
             let local = self.local.lock().unwrap();
             (local.ocr.clone(), local.index.clone())
         };
-        let library = self.library.lock().unwrap();
+        let library = self.library_read.lock().unwrap();
+        let library_revision = library.revision()?;
         let settings = library.settings()?;
-        let counts = |mut job: JobStatus, kind| -> Result<JobStatus> {
-            (job.pending, job.failed, job.completed, job.incomplete) = library.task_counts(kind)?;
+        let counts = library.all_task_counts()?;
+        drop(library);
+        let update = |mut job: JobStatus, counts| {
+            (job.pending, job.failed, job.completed, job.incomplete) = counts;
             job.total = job.done + job.pending + job.failed;
             if !job.running {
                 job.message.clear();
@@ -739,10 +788,10 @@ impl AppState {
             if !job.running && job.pending == 0 && job.failed == 0 {
                 job.error = None;
             }
-            Ok(job)
+            job
         };
         Ok(ModelStatus {
-            library_revision: library.revision(),
+            library_revision,
             ready: intelligence::missing_embedding(&self.models, settings.embedding_model)
                 .is_empty(),
             ocr_ready: intelligence::missing_ocr(&self.models).is_empty(),
@@ -751,16 +800,16 @@ impl AppState {
             missing: intelligence::missing(&self.models, settings.embedding_model),
             job,
             import,
-            ocr: counts(ocr, TaskKind::Ocr)?,
-            index: counts(index, TaskKind::Index)?,
-            vision: counts(vision, TaskKind::Vision)?,
+            ocr: update(ocr, counts.ocr),
+            index: update(index, counts.index),
+            vision: update(vision, counts.vision),
         })
     }
     pub fn vision_status(&self) -> Result<VisionStatus> {
         let session = self.vision.lock().unwrap();
         Ok(VisionStatus {
             config: self
-                .library
+                .library_read
                 .lock()
                 .unwrap()
                 .vision_config()?
@@ -775,7 +824,7 @@ impl AppState {
                 return Err("请先暂停图片理解任务再修改配置".into());
             }
             let client = VisionClient::new(config)?;
-            self.library
+            self.library_write
                 .lock()
                 .unwrap()
                 .save_vision_config(&client.config)?;

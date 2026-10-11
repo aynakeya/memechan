@@ -359,7 +359,7 @@ desktopTest('输入与组词立即取消旧搜索，后台刷新不重复推理'
     input.dispatchEvent(new window.InputEvent('input', { bubbles: true }))
   })
   await page.waitForFunction(() => window.testPendingSearches.has('敬礼'))
-  const snapshots = await page.evaluate(
+  let snapshots = await page.evaluate(
     () => window.testCalls.filter((call) => call.command === 'snapshot').length,
   )
   await page.evaluate(() => {
@@ -377,6 +377,31 @@ desktopTest('输入与组词立即取消旧搜索，后台刷新不重复推理'
   await page.evaluate(() => window.testPendingSearches.get('敬礼')([window.testAssets[2]]))
   await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 1)
   assert.equal(await page.locator('.asset-card').getAttribute('aria-label'), '谢谢老板')
+
+  snapshots = await page.evaluate(
+    () => window.testCalls.filter((call) => call.command === 'snapshot').length,
+  )
+  await page.evaluate(() => {
+    window.testModel.libraryRevision++
+  })
+  await page.waitForFunction(
+    (count) => window.testCalls.filter((call) => call.command === 'snapshot').length > count,
+    snapshots,
+  )
+  await page.waitForTimeout(450)
+  assert.equal(
+    await page.evaluate(() => window.testCalls.filter((call) => call.command === 'search').length),
+    2,
+  )
+  assert.equal(await page.locator('.asset-card').getAttribute('aria-label'), '谢谢老板')
+  await search.press('Enter')
+  await page.waitForFunction(
+    () => window.testCalls.filter((call) => call.command === 'search').length === 3,
+  )
+  await page.evaluate(() =>
+    window.testPendingSearches.get('敬礼')([window.testAssets[2], window.testAssets[0]]),
+  )
+  await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 2)
 
   await search.fill('新查询')
   await page.waitForFunction(() => window.testPendingSearches.has('新查询'))

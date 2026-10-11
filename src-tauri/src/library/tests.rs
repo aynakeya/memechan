@@ -68,6 +68,10 @@ fn clearing_indexes_preserves_text_and_waits_for_explicit_rebuild() -> Result<()
 fn clearing_generated_text_preserves_other_sources_and_retry_does_not_restore_it() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let mut library = Library::open(&directory.path().join("library"))?;
+    let reader = Library::open_read_only(&library.root)?;
+    for kind in [TaskKind::Ocr, TaskKind::Index, TaskKind::Vision] {
+        assert_eq!(reader.task_counts(kind)?, (0, 0, 0, 0));
+    }
     let mut ids = Vec::new();
     for index in 0..2 {
         let path = directory.path().join(format!("{index}.png"));
@@ -91,10 +95,10 @@ fn clearing_generated_text_preserves_other_sources_and_retry_does_not_restore_it
         ids.push(asset.id);
     }
     for kind in [TaskKind::Ocr, TaskKind::Vision, TaskKind::Index] {
-        assert_eq!(library.task_counts(kind)?, (0, 0, 2, 0));
+        assert_eq!(reader.task_counts(kind)?, (0, 0, 2, 0));
     }
     assert_eq!(library.clear_text(TaskKind::Vision, Some(&ids[0]))?, 1);
-    assert_eq!(library.task_counts(TaskKind::Vision)?, (0, 0, 1, 1));
+    assert_eq!(reader.task_counts(TaskKind::Vision)?, (0, 0, 1, 1));
     assert_eq!(library.asset(&ids[1])?.ai_description, "图片描述");
     assert_eq!(
         library
@@ -110,12 +114,12 @@ fn clearing_generated_text_preserves_other_sources_and_retry_does_not_restore_it
         .search("动作", "semantic", None, Some(&[1.0, 0.0]))?
         .is_empty());
     library.fail_vision(&ids[1], "HTTP 429")?;
-    assert_eq!(library.task_counts(TaskKind::Vision)?, (0, 1, 0, 2));
+    assert_eq!(reader.task_counts(TaskKind::Vision)?, (0, 1, 0, 2));
     library.queue_task(TaskKind::Vision, None, true)?;
     assert_eq!(library.asset(&ids[0])?.ai_state, "idle");
     assert_eq!(library.asset(&ids[1])?.ai_state, "pending");
     library.queue_task(TaskKind::Ocr, None, true)?;
-    assert_eq!(library.task_counts(TaskKind::Ocr)?, (0, 0, 0, 2));
+    assert_eq!(reader.task_counts(TaskKind::Ocr)?, (0, 0, 0, 2));
     for asset in library.assets()? {
         assert_eq!(asset.description, "手写内容");
         assert!(asset.favorite && Path::new(&asset.path).is_file());
@@ -124,9 +128,9 @@ fn clearing_generated_text_preserves_other_sources_and_retry_does_not_restore_it
     drop(library);
     let library = Library::open(&directory.path().join("library"))?;
     assert_eq!(library.asset(&ids[0])?.ai_state, "idle");
-    assert_eq!(library.task_counts(TaskKind::Vision)?, (1, 0, 0, 2));
-    assert_eq!(library.task_counts(TaskKind::Ocr)?, (0, 0, 0, 2));
-    assert_eq!(library.task_counts(TaskKind::Index)?, (2, 0, 0, 2));
+    assert_eq!(reader.task_counts(TaskKind::Vision)?, (1, 0, 0, 2));
+    assert_eq!(reader.task_counts(TaskKind::Ocr)?, (0, 0, 0, 2));
+    assert_eq!(reader.task_counts(TaskKind::Index)?, (2, 0, 0, 2));
     Ok(())
 }
 
@@ -134,6 +138,7 @@ fn clearing_generated_text_preserves_other_sources_and_retry_does_not_restore_it
 fn search_ranks_valid_vectors_and_keywords_within_the_selected_group() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let mut library = Library::open(&directory.path().join("library"))?;
+    let reader = Library::open_read_only(&library.root)?;
     let group = library.save_group(None, "动作", "#88966d")?;
     let mut ids = Vec::new();
     for (index, description, vector) in [
@@ -160,20 +165,39 @@ fn search_ranks_valid_vectors_and_keywords_within_the_selected_group() -> Result
         ids.push(asset.id);
     }
     let query = [1.0, 0.0];
-    let result = library.search("敬礼", "hybrid", None, Some(&query))?;
+    let result = reader.search("敬礼", "hybrid", None, Some(&query))?;
     assert_eq!(result[0].id, ids[0]);
-    let result = library.search("敬礼", "semantic", Some(group.id), Some(&query))?;
+    let result = reader.search("敬礼", "semantic", Some(group.id), Some(&query))?;
     assert_eq!(
         result.iter().map(|asset| &asset.id).collect::<Vec<_>>(),
         vec![&ids[1], &ids[2]]
     );
-    let result = library.search("敬礼", "keyword", Some(group.id), None)?;
+    let result = reader.search("敬礼", "keyword", Some(group.id), None)?;
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].id, ids[2]);
+    let version = reader.embedding_version()?;
+    let data = reader.search_data(Some(group.id), Some(&version))?;
+    // A completed read remains usable after edits; a new read rejects the stale vector.
     library.save_asset(&ids[1], "正在睡觉", false, &[group.id])?;
-    let result = library.search("敬礼", "semantic", Some(group.id), Some(&query))?;
+    let previous = data.rank("敬礼", "semantic", Some(&query))?;
+    assert_eq!(previous.len(), 2);
+    assert_eq!(previous[0].description, "收到长官");
+    let result = reader.search("敬礼", "semantic", Some(group.id), Some(&query))?;
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].id, ids[2]);
+    library.set_embedding_version("replacement-model")?;
+    assert_eq!(reader.embedding_version()?, "replacement-model");
+    let source = Library::search_text(&library.asset(&ids[2])?);
+    library.put_embedding(&ids[2], &source, &query)?;
+    // An old query vector must never be compared with a different model's vectors.
+    assert!(reader
+        .search_data(None, Some(&version))?
+        .rank("敬礼", "semantic", Some(&query))?
+        .is_empty());
+    assert_eq!(
+        reader.search("敬礼", "semantic", None, Some(&query))?.len(),
+        1
+    );
     Ok(())
 }
 
@@ -420,7 +444,7 @@ fn model_changes_requeue_vectors_without_repeating_ocr() -> Result<()> {
     library.db.execute_batch("DROP TABLE index_model")?;
     drop(library);
     let library = Library::open(&root)?;
-    assert_eq!(library.embedding_version, "installed-model-fingerprint");
+    assert_eq!(library.embedding_version()?, "installed-model-fingerprint");
     assert_eq!(library.asset(&asset.id)?.index_state, "ready");
     library
         .db

@@ -54,6 +54,22 @@ pub fn completion(text: &str) -> Value {
 
 // Synchronous fixture setup uses the same preparation/publication boundary as the app.
 impl crate::library::Library {
+    pub fn search(
+        &self,
+        query: &str,
+        mode: &str,
+        group: Option<i64>,
+        embedding: Option<&[f32]>,
+    ) -> Result<Vec<crate::library::Asset>> {
+        let version = if mode != "keyword" && embedding.is_some() {
+            Some(self.embedding_version()?)
+        } else {
+            None
+        };
+        self.search_data(group, version.as_deref())?
+            .rank(query, mode, embedding)
+    }
+
     pub fn import_files(
         &mut self,
         paths: &[String],

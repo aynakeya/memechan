@@ -1,7 +1,8 @@
 use crate::{import::PreparedImport, intelligence::EmbeddingModel, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::Cell,
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
@@ -99,10 +100,18 @@ impl TaskKind {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct TaskCounts {
+    // Pending, failed, completed, incomplete; idle items are included in incomplete.
+    pub ocr: (usize, usize, usize, usize),
+    pub index: (usize, usize, usize, usize),
+    pub vision: (usize, usize, usize, usize),
+}
+
 pub struct Library {
     pub root: PathBuf,
     db: Connection,
-    pub(crate) embedding_version: String,
+    task_counts_cache: Cell<Option<(u64, u64, TaskCounts)>>,
 }
 impl Library {
     pub fn open(root: &Path) -> Result<Self> {
@@ -151,10 +160,10 @@ impl Library {
         let mut library = Self {
             root: root.to_path_buf(),
             db,
-            embedding_version: String::new(),
+            task_counts_cache: Cell::new(None),
         };
         let model = library.settings()?.embedding_model;
-        library.embedding_version = library
+        let embedding_version: String = library
             .db
             .query_row("SELECT version FROM index_model WHERE id=1", [], |row| {
                 row.get(0)
@@ -165,24 +174,43 @@ impl Library {
         let tx = library.db.transaction()?;
         tx.execute(
             "INSERT OR IGNORE INTO index_model VALUES(1,?1)",
-            [&library.embedding_version],
+            [&embedding_version],
         )?;
         tx.execute(
             "UPDATE assets SET index_state='pending' WHERE id IN
              (SELECT asset_id FROM embeddings WHERE model<>?1)",
-            [&library.embedding_version],
+            [&embedding_version],
         )?;
         tx.execute(
             "DELETE FROM embeddings WHERE model<>?1",
-            [&library.embedding_version],
+            [&embedding_version],
         )?;
         tx.execute_batch(
-            "CREATE INDEX IF NOT EXISTS assets_pending ON assets(created_at)
-            WHERE ocr_state='pending' OR index_state='pending';
+            "DROP INDEX IF EXISTS assets_pending;
+            CREATE INDEX IF NOT EXISTS assets_ocr_pending ON assets(created_at) WHERE ocr_state='pending';
+            CREATE INDEX IF NOT EXISTS assets_index_pending ON assets(created_at) WHERE index_state='pending';
             CREATE INDEX IF NOT EXISTS assets_vision_pending ON assets(created_at) WHERE ai_state='pending';",
         )?;
         tx.commit()?;
         Ok(library)
+    }
+    // Open only after the writable connection has initialized and migrated the database.
+    pub fn open_read_only(root: &Path) -> Result<Self> {
+        Ok(Self {
+            root: root.to_path_buf(),
+            db: Connection::open_with_flags(
+                root.join("library.sqlite3"),
+                OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )?,
+            task_counts_cache: Cell::new(None),
+        })
+    }
+    pub fn embedding_version(&self) -> Result<String> {
+        Ok(self
+            .db
+            .query_row("SELECT version FROM index_model WHERE id=1", [], |row| {
+                row.get(0)
+            })?)
     }
     pub fn settings(&self) -> Result<Settings> {
         let json: Option<String> = self
@@ -219,13 +247,10 @@ impl Library {
             )?;
         }
         tx.commit()?;
-        if changed_model {
-            self.embedding_version = settings.embedding_model.version().to_owned();
-        }
         Ok(())
     }
     pub fn set_embedding_version(&mut self, version: &str) -> Result<bool> {
-        if self.embedding_version == version {
+        if self.embedding_version()? == version {
             return Ok(false);
         }
         let tx = self.db.transaction()?;
@@ -236,11 +261,13 @@ impl Library {
         tx.execute("DELETE FROM embeddings", [])?;
         tx.execute("UPDATE index_model SET version=?1 WHERE id=1", [version])?;
         tx.commit()?;
-        self.embedding_version = version.to_owned();
         Ok(true)
     }
-    pub fn revision(&self) -> u64 {
-        self.db.total_changes()
+    // Compare only values from the same read connection; this tracks other connections' commits.
+    pub fn revision(&self) -> Result<u64> {
+        Ok(self
+            .db
+            .pragma_query_value(None, "data_version", |row| row.get(0))?)
     }
     pub fn vision_config(&self) -> Result<Option<crate::vision::VisionConfig>> {
         let json: Option<String> = self
@@ -260,6 +287,7 @@ impl Library {
         Ok(())
     }
     pub fn next_vision(&self, only: Option<&str>) -> Result<Option<Asset>> {
+        let tx = self.db.unchecked_transaction()?;
         let id: Option<String> = self
             .db
             .query_row(
@@ -268,7 +296,9 @@ impl Library {
                 |row| row.get(0),
             )
             .optional()?;
-        id.map(|id| self.asset(&id)).transpose()
+        let asset = id.map(|id| self.asset(&id)).transpose()?;
+        tx.commit()?;
+        Ok(asset)
     }
     pub fn update_vision(&self, id: &str, description: &crate::vision::Description) -> Result<()> {
         self.db.execute(
@@ -327,11 +357,56 @@ impl Library {
         Ok(())
     }
     pub fn task_counts(&self, kind: TaskKind) -> Result<(usize, usize, usize, usize)> {
-        let column = kind.column();
-        Ok(self.db.query_row(&format!(
-            "SELECT COUNT(*) FILTER (WHERE {column}='pending'),COUNT(*) FILTER (WHERE {column}='error'),
-            COUNT(*) FILTER (WHERE {column}='ready'),COUNT(*) FILTER (WHERE {column}<>'ready') FROM assets"
-        ), [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?)
+        let counts = self.all_task_counts()?;
+        Ok(match kind {
+            TaskKind::Ocr => counts.ocr,
+            TaskKind::Index => counts.index,
+            TaskKind::Vision => counts.vision,
+        })
+    }
+    pub fn all_task_counts(&self) -> Result<TaskCounts> {
+        // data_version tracks other connections; total_changes also covers this connection's writes.
+        // Capture both before the query so concurrent commits are picked up on the next call.
+        let revision = self.revision()?;
+        let changes = self.db.total_changes();
+        if let Some((cached_revision, cached_changes, counts)) = self.task_counts_cache.get() {
+            if cached_revision == revision && cached_changes == changes {
+                return Ok(counts);
+            }
+        }
+        let counts = self.db.query_row(
+            "SELECT COUNT(*),
+             COUNT(*) FILTER (WHERE ocr_state='pending'),
+             COUNT(*) FILTER (WHERE ocr_state='error'),
+             COUNT(*) FILTER (WHERE ocr_state='ready'),
+             COUNT(*) FILTER (WHERE index_state='pending'),
+             COUNT(*) FILTER (WHERE index_state='error'),
+             COUNT(*) FILTER (WHERE index_state='ready'),
+             COUNT(*) FILTER (WHERE ai_state='pending'),
+             COUNT(*) FILTER (WHERE ai_state='error'),
+             COUNT(*) FILTER (WHERE ai_state='ready') FROM assets",
+            [],
+            |row| {
+                let total: usize = row.get(0)?;
+                let read = |offset| -> rusqlite::Result<_> {
+                    let completed: usize = row.get(offset + 2)?;
+                    Ok((
+                        row.get(offset)?,
+                        row.get(offset + 1)?,
+                        completed,
+                        total - completed,
+                    ))
+                };
+                Ok(TaskCounts {
+                    ocr: read(1)?,
+                    index: read(4)?,
+                    vision: read(7)?,
+                })
+            },
+        )?;
+        self.task_counts_cache
+            .set(Some((revision, changes, counts)));
+        Ok(counts)
     }
     pub fn next_task(
         &self,
@@ -339,11 +414,14 @@ impl Library {
         wait_for_ocr: bool,
         only: Option<&str>,
     ) -> Result<Option<Asset>> {
+        let tx = self.db.unchecked_transaction()?;
         let column = kind.column();
         let id: Option<String> = self.db.query_row(&format!(
             "SELECT id FROM assets WHERE {column}='pending' AND (?1=0 OR ocr_state<>'pending') AND (?2 IS NULL OR id=?2) ORDER BY created_at,rowid LIMIT 1"
         ), params![wait_for_ocr, only], |row| row.get(0)).optional()?;
-        id.map(|id| self.asset(&id)).transpose()
+        let asset = id.map(|id| self.asset(&id)).transpose()?;
+        tx.commit()?;
+        Ok(asset)
     }
     fn read_asset(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<Asset> {
         let id: String = row.get(0)?;
@@ -436,12 +514,17 @@ impl Library {
           .collect::<std::result::Result<Vec<_>, _>>()?)
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
-        Ok(Snapshot {
-            revision: self.revision(),
+        // Read the revision first so commits after it cannot be missed by the next poll.
+        let revision = self.revision()?;
+        let tx = self.db.unchecked_transaction()?;
+        let snapshot = Snapshot {
+            revision,
             assets: self.assets()?,
             groups: self.groups()?,
             settings: self.settings()?,
-        })
+        };
+        tx.commit()?;
+        Ok(snapshot)
     }
     pub fn save_group(&self, id: Option<i64>, name: &str, color: &str) -> Result<Group> {
         let name = name.trim();
@@ -664,9 +747,10 @@ impl Library {
             .iter()
             .flat_map(|value| value.to_le_bytes())
             .collect();
+        let version = self.embedding_version()?;
         let tx = self.db.transaction()?;
         tx.execute("INSERT INTO embeddings VALUES(?1,?2,?3,?4) ON CONFLICT(asset_id) DO UPDATE SET model=excluded.model,source=excluded.source,vector=excluded.vector",
-          params![id,self.embedding_version,source,bytes])?;
+          params![id,version,source,bytes])?;
         tx.execute("UPDATE assets SET index_state='ready' WHERE id=?1", [id])?;
         tx.commit()?;
         Ok(())
@@ -680,26 +764,47 @@ impl Library {
         }
         text
     }
-    pub fn search(
-        &self,
-        query: &str,
-        mode: &str,
-        group: Option<i64>,
-        embedding: Option<&[f32]>,
-    ) -> Result<Vec<Asset>> {
+    // Return owned data so callers can release the read lock before matching and ranking.
+    pub fn search_data(&self, group: Option<i64>, version: Option<&str>) -> Result<SearchData> {
+        let tx = self.db.unchecked_transaction()?;
+        let assets = self
+            .assets()?
+            .into_iter()
+            .filter(|asset| group.is_none_or(|id| asset.groups.contains(&id)))
+            .collect();
+        let embeddings = if let Some(version) = version {
+            self.db
+                .prepare(
+                    "SELECT asset_id,source,vector FROM embeddings WHERE model=?1 AND
+                (?2 IS NULL OR asset_id IN (SELECT asset_id FROM asset_groups WHERE group_id=?2))",
+                )?
+                .query_map(params![version, group], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
+        tx.commit()?;
+        Ok(SearchData { assets, embeddings })
+    }
+}
+
+pub struct SearchData {
+    assets: Vec<Asset>,
+    embeddings: Vec<(String, String, Vec<u8>)>,
+}
+impl SearchData {
+    pub fn rank(self, query: &str, mode: &str, embedding: Option<&[f32]>) -> Result<Vec<Asset>> {
         if !["hybrid", "keyword", "semantic"].contains(&mode) {
             return Err("无效的搜索模式".into());
         }
         let query = query.trim().to_lowercase();
-        let mut assets: Vec<_> = self
-            .assets()?
-            .into_iter()
-            .filter(|a| group.is_none_or(|id| a.groups.contains(&id)))
-            .collect();
+        let mut assets = self.assets;
         if query.is_empty() {
             return Ok(assets);
         }
-        let sources: Vec<_> = assets.iter().map(Self::search_text).collect();
+        let sources: Vec<_> = assets.iter().map(Library::search_text).collect();
         let mut keyword = vec![];
         let mut semantic = vec![];
         for (index, source) in sources.iter().enumerate() {
@@ -713,18 +818,10 @@ impl Library {
                 .enumerate()
                 .map(|(index, asset)| (asset.id.as_str(), index))
                 .collect();
-            let mut statement = self.db.prepare(
-                "SELECT asset_id,source,vector FROM embeddings WHERE model=?1 AND
-                (?2 IS NULL OR asset_id IN (SELECT asset_id FROM asset_groups WHERE group_id=?2))",
-            )?;
-            let mut rows = statement.query(params![self.embedding_version, group])?;
-            while let Some(row) = rows.next()? {
-                let id = row.get_ref(0)?.as_str()?;
-                let Some(&index) = positions.get(id) else {
+            for (id, source, bytes) in self.embeddings {
+                let Some(&index) = positions.get(id.as_str()) else {
                     continue;
                 };
-                let source = row.get_ref(1)?.as_str()?;
-                let bytes = row.get_ref(2)?.as_blob()?;
                 if source != sources[index] || bytes.len() != query.len() * 4 {
                     continue;
                 }
