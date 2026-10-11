@@ -211,4 +211,59 @@ mod tests {
         assert_eq!(fs::read(nested.join("keep.png"))?, b"nested");
         Ok(())
     }
+
+    #[test]
+    fn converted_pngs_are_reused_and_share_the_copy_cache_budget() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("library");
+        let mut library = crate::library::Library::open(&root)?;
+        let mut cache = CopyCache::new(root.clone());
+        for extension in ["jpg", "webp"] {
+            let source = directory.path().join(format!("source.{extension}"));
+            image::DynamicImage::new_rgb8(12, 8).save(&source)?;
+            library.import_files(&[source.to_string_lossy().into_owned()], None);
+            let asset = library
+                .assets()?
+                .into_iter()
+                .find(|asset| asset.format == extension)
+                .unwrap();
+            let copy = crate::media::prepare_copy(&asset, &root, 0, false)?;
+            let png = crate::media::clipboard_png(&copy)?;
+            let converted = copy.with_extension("clipboard-v1.png");
+            assert_eq!(
+                image::load_from_memory(&png)?.to_rgba8(),
+                crate::media::inspect(&fs::read(&copy)?)?.preview.to_rgba8()
+            );
+            assert_eq!(
+                cache.usage()?.bytes,
+                fs::metadata(&copy)?.len() + png.len() as u64
+            );
+
+            // File and PNG variants can be evicted independently. Reusing a PNG needs no decode.
+            fs::remove_file(&copy)?;
+            File::options()
+                .write(true)
+                .open(&converted)?
+                .set_modified(SystemTime::now() - RECENT * 2)?;
+            assert_eq!(crate::media::clipboard_png(&copy)?, png);
+            assert_eq!(cache.clean(0, || Ok(vec![]))?.files, 1);
+            File::options()
+                .write(true)
+                .open(&converted)?
+                .set_modified(SystemTime::now() - RECENT * 2)?;
+            assert_eq!(cache.clean(1, || Ok(vec![]))?.files, 0);
+            assert!(Path::new(&asset.path).exists());
+            // Eviction only costs a fresh conversion on the next copy.
+            let copy = crate::media::prepare_copy(&asset, &root, 0, false)?;
+            assert_eq!(crate::media::clipboard_png(&copy)?, png);
+            for file in [copy, converted] {
+                File::options()
+                    .write(true)
+                    .open(file)?
+                    .set_modified(SystemTime::now() - RECENT * 2)?;
+            }
+            assert_eq!(cache.clean(0, || Ok(vec![]))?.files, 0);
+        }
+        Ok(())
+    }
 }

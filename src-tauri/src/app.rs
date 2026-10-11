@@ -1,5 +1,6 @@
 use crate::{
     import::{read_source, PreparedImport},
+    inference_scheduler::InferenceScheduler,
     intelligence::{self, Intelligence},
     library::{Asset, ImportReport, Library, Settings, TaskKind},
     vision::{Description, VisionClient, VisionConfig},
@@ -18,6 +19,7 @@ pub struct AppState {
     pub(crate) library: Mutex<Library>,
     models: PathBuf,
     intelligence: Mutex<Option<Intelligence>>,
+    inference_scheduler: InferenceScheduler,
     local: Mutex<LocalTasks>,
     job: Mutex<JobStatus>,
     import_job: Mutex<JobStatus>,
@@ -100,6 +102,7 @@ impl AppState {
             library: Mutex::new(library),
             models: root.join("models"),
             intelligence: Mutex::new(None),
+            inference_scheduler: InferenceScheduler::default(),
             local: Mutex::new(LocalTasks {
                 index: JobStatus {
                     error: model_error,
@@ -304,6 +307,8 @@ impl AppState {
     }
     fn process_local(self: &Arc<Self>) -> Result<()> {
         loop {
+            // A queued interactive search gets the next turn before another image.
+            let _permit = self.inference_scheduler.acquire_background_permit();
             let (kind, asset) = {
                 let mut local = self.local.lock().unwrap();
                 let library = self.library.lock().unwrap();
@@ -657,7 +662,19 @@ impl AppState {
         }
         result
     }
-    pub fn search(&self, query: &str, mode: &str, group_id: Option<i64>) -> Result<Vec<Asset>> {
+    pub fn invalidate_searches(&self) -> u64 {
+        self.inference_scheduler.invalidate_searches()
+    }
+    pub fn search(
+        &self,
+        generation: u64,
+        query: &str,
+        mode: &str,
+        group_id: Option<i64>,
+    ) -> Result<Option<Vec<Asset>>> {
+        if !self.inference_scheduler.is_search_current(generation) {
+            return Ok(None);
+        }
         if !["hybrid", "keyword", "semantic"].contains(&mode) {
             return Err("无效的搜索模式".into());
         }
@@ -671,24 +688,37 @@ impl AppState {
                 if mode == "semantic" {
                     return Err(format!("语义模型不可用：{}", missing.join("、")).into());
                 }
-                return self
-                    .library
-                    .lock()
-                    .unwrap()
-                    .search(query, mode, group_id, None);
+            } else {
+                let Some(_permit) = self.inference_scheduler.acquire_search_permit(generation)
+                else {
+                    return Ok(None);
+                };
+                return self.with_models(TaskKind::Index, |models| {
+                    // Model replacement may have kept this request waiting on the mutex.
+                    if !self.inference_scheduler.is_search_current(generation) {
+                        return Ok(None);
+                    }
+                    models.ensure_embedding()?;
+                    // Loading a large model can outlast the query that requested it.
+                    if !self.inference_scheduler.is_search_current(generation) {
+                        return Ok(None);
+                    }
+                    let embedding = models.embed(query, true)?;
+                    let library = self.library.lock().unwrap();
+                    if !self.inference_scheduler.is_search_current(generation) {
+                        return Ok(None);
+                    }
+                    library
+                        .search(query, mode, group_id, Some(&embedding))
+                        .map(Some)
+                });
             }
-            return self.with_models(TaskKind::Index, |models| {
-                let embedding = models.embed(query, true)?;
-                self.library
-                    .lock()
-                    .unwrap()
-                    .search(query, mode, group_id, Some(&embedding))
-            });
         }
-        self.library
-            .lock()
-            .unwrap()
-            .search(query, mode, group_id, None)
+        let library = self.library.lock().unwrap();
+        if !self.inference_scheduler.is_search_current(generation) {
+            return Ok(None);
+        }
+        library.search(query, mode, group_id, None).map(Some)
     }
     pub fn model_status(&self) -> Result<ModelStatus> {
         let job = self.job.lock().unwrap().clone();

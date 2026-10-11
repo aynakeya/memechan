@@ -149,6 +149,7 @@ let listScrollTop = 0
 let unlistenDrop: (() => void) | undefined
 let refreshingModels = false
 let libraryRevision = -1
+let searchInvalidation: Promise<number | null> = Promise.resolve(null)
 async function refresh() {
   const data = await api.snapshot()
   libraryRevision = data.revision
@@ -160,7 +161,8 @@ async function refresh() {
 }
 async function refreshLibrary() {
   await refresh()
-  if (query.value.trim()) scheduleSearch()
+  // An in-flight search reads the latest library after embedding the query.
+  if (query.value.trim() && !searching.value) scheduleSearch()
 }
 async function refreshModels() {
   if (refreshingModels) return
@@ -183,18 +185,21 @@ async function refreshModels() {
   }
 }
 async function runSearch() {
-  const sequence = ++searchSequence
-  searchError.value = ''
+  const sequence = searchSequence
   const text = query.value.trim()
   if (!text) {
+    searchError.value = ''
     results.value = null
     searching.value = false
     return
   }
   searching.value = true
   try {
-    const found = await api.search(text, searchMode.value, groupId.value)
-    if (sequence === searchSequence) results.value = found
+    const generation = await searchInvalidation
+    if (sequence !== searchSequence || generation === null) return
+    searchError.value = ''
+    const found = await api.search(text, searchMode.value, groupId.value, generation)
+    if (sequence === searchSequence && found !== null) results.value = found
   } catch (error) {
     if (sequence === searchSequence) {
       searchError.value = errorMessage(error)
@@ -204,8 +209,20 @@ async function runSearch() {
     if (sequence === searchSequence) searching.value = false
   }
 }
+function invalidateSearches() {
+  const sequence = ++searchSequence
+  // Keep cancellation commands ordered, including composition and empty queries.
+  if (isDesktop) {
+    searchInvalidation = searchInvalidation
+      .then(() => api.invalidateSearches())
+      .catch((error) => {
+        if (sequence === searchSequence) searchError.value = errorMessage(error)
+        return null
+      })
+  }
+}
 function scheduleSearch() {
-  ++searchSequence
+  invalidateSearches()
   clearTimeout(searchTimer)
   searching.value = false
   if (!searchComposing.value) searchTimer = setTimeout(runSearch, 350)
@@ -500,6 +517,7 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  invalidateSearches()
   smallWindowMedia.removeEventListener('change', windowSizeChanged)
   unlistenDrop?.()
   clearInterval(pollTimer)

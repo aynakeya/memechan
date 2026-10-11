@@ -168,6 +168,64 @@ desktopTest('详情开关、编辑描述、复制尺寸、预览及搜索错误�
   await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 6)
 })
 
+desktopTest('输入与组词立即取消旧搜索，后台刷新不重复推理', async (page) => {
+  await page.evaluate(() => {
+    window.testHoldSearch = true
+  })
+  const search = page.getByLabel('搜索表情')
+  await search.fill('旧查询')
+  await page.waitForFunction(() => window.testPendingSearches.has('旧查询'))
+  const oldGeneration = await page.evaluate(() => window.testSearchGeneration)
+  await search.evaluate((input) => {
+    input.dispatchEvent(new window.CompositionEvent('compositionstart', { bubbles: true }))
+    input.value = 'jing li'
+    input.dispatchEvent(new window.InputEvent('input', { bubbles: true, isComposing: true }))
+  })
+  await page.waitForFunction((old) => window.testSearchGeneration > old, oldGeneration)
+  await page.evaluate(() => window.testPendingSearches.get('旧查询')([window.testAssets[0]]))
+  await page.waitForTimeout(400)
+  assert.equal(await page.locator('.asset-card').count(), 6)
+  assert.equal(
+    await page.evaluate(() => window.testCalls.filter((call) => call.command === 'search').length),
+    1,
+  )
+  await search.evaluate((input) => {
+    input.value = '敬礼'
+    input.dispatchEvent(
+      new window.CompositionEvent('compositionend', { bubbles: true, data: input.value }),
+    )
+    input.dispatchEvent(new window.InputEvent('input', { bubbles: true }))
+  })
+  await page.waitForFunction(() => window.testPendingSearches.has('敬礼'))
+  const snapshots = await page.evaluate(
+    () => window.testCalls.filter((call) => call.command === 'snapshot').length,
+  )
+  await page.evaluate(() => {
+    window.testModel.libraryRevision++
+  })
+  await page.waitForFunction(
+    (count) => window.testCalls.filter((call) => call.command === 'snapshot').length > count,
+    snapshots,
+  )
+  await page.waitForTimeout(400)
+  assert.equal(
+    await page.evaluate(() => window.testCalls.filter((call) => call.command === 'search').length),
+    2,
+  )
+  await page.evaluate(() => window.testPendingSearches.get('敬礼')([window.testAssets[2]]))
+  await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 1)
+  assert.equal(await page.locator('.asset-card').getAttribute('aria-label'), '谢谢老板')
+
+  await search.fill('新查询')
+  await page.waitForFunction(() => window.testPendingSearches.has('新查询'))
+  const generation = await page.evaluate(() => window.testSearchGeneration)
+  await page.getByRole('button', { name: '清空搜索' }).click()
+  await page.waitForFunction((old) => window.testSearchGeneration > old, generation)
+  await page.evaluate(() => window.testPendingSearches.get('新查询')([window.testAssets[0]]))
+  await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 6)
+  assert.equal(await page.getByRole('alert').count(), 0)
+})
+
 desktopTest('大资料库虚拟滚动、尺寸切换和后台刷新', async (page) => {
   await page.waitForFunction(() => window.testCalls.some((call) => call.command === 'model_status'))
   const snapshots = await page.evaluate(

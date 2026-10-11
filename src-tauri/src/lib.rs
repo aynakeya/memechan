@@ -6,6 +6,7 @@ mod copy_cache;
 #[cfg(feature = "desktop")]
 pub mod desktop;
 mod import;
+mod inference_scheduler;
 pub mod intelligence;
 pub mod library;
 pub mod media;

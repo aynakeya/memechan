@@ -126,6 +126,17 @@ pub fn prepare_copy(
 }
 
 pub fn clipboard_png(path: &Path) -> Result<Vec<u8>> {
+    // prepare_copy names immutable artifacts by content hash and output dimensions.
+    // These PNG variants share the same copies/ capacity limit and cleanup lock.
+    let cached = path.with_extension("clipboard-v1.png");
+    if cached.exists() {
+        let bytes = fs::read(&cached)?;
+        File::options()
+            .write(true)
+            .open(&cached)?
+            .set_modified(std::time::SystemTime::now())?;
+        return Ok(bytes);
+    }
     let bytes = fs::read(path)?;
     if image::guess_format(&bytes)? == ImageFormat::Png
         && PngDecoder::new(Cursor::new(&bytes))?.orientation()? == Orientation::NoTransforms
@@ -136,7 +147,11 @@ pub fn clipboard_png(path: &Path) -> Result<Vec<u8>> {
     let image = inspect(&bytes)?.preview;
     let mut png = Cursor::new(Vec::new());
     image.write_to(&mut png, ImageFormat::Png)?;
-    Ok(png.into_inner())
+    let png = png.into_inner();
+    let mut temporary = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
+    temporary.write_all(&png)?;
+    temporary.persist(cached)?;
+    Ok(png)
 }
 
 fn animation_repeat(count: LoopCount) -> Option<Repeat> {
@@ -239,11 +254,11 @@ mod tests {
     fn clipboard_png_preserves_pixels_alpha_and_display_orientation() -> Result<()> {
         use image::{codecs::png::PngEncoder, ImageEncoder};
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("source.png");
         let image = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(3, 2, |x, y| {
             image::Rgba([x as u8 * 80, y as u8 * 120, 64, x as u8 * 100])
         }));
         for rotate in [false, true] {
+            let path = dir.path().join(format!("source-{rotate}.png"));
             let mut bytes = Vec::new();
             let mut encoder = PngEncoder::new(&mut bytes);
             if rotate {
@@ -263,6 +278,7 @@ mod tests {
             };
             assert_eq!(copied, expected.to_rgba8());
             assert_eq!(fs::read(&path)?, bytes);
+            assert_eq!(path.with_extension("clipboard-v1.png").exists(), rotate);
         }
         Ok(())
     }

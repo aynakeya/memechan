@@ -27,8 +27,9 @@ function invoke<T>(command: string, args?: InvokeArgs): Promise<T> {
 }
 export const api = {
   snapshot: () => invoke<Snapshot>('snapshot'),
-  search: (query: string, mode: SearchMode, groupId: number | null) =>
-    invoke<Asset[]>('search', { query, mode, groupId }),
+  invalidateSearches: () => invoke<number>('invalidate_searches'),
+  search: (query: string, mode: SearchMode, groupId: number | null, generation: number) =>
+    invoke<Asset[] | null>('search', { query, mode, groupId, generation }),
   importFiles: (paths: string[], groupId: number | null) =>
     invoke<ImportReport>('import_files', { paths, groupId }),
   pickImport: (groupId: number | null) => invoke<ImportReport>('pick_import', { groupId }),

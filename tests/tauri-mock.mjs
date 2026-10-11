@@ -52,6 +52,8 @@ const vision = {
   active: false,
 }
 window.testCalls = []
+window.testSearchGeneration = 0
+window.testPendingSearches = new Map()
 window.testAssets = assets
 window.testCopyCache = { bytes: 32 * 1048576, files: 24, limitBytes: 512 * 1048576, error: null }
 window.testModelImportResult = true
@@ -198,7 +200,17 @@ mockIPC(
       window.testModel.ocrEnabled = args.settings.ocrEnabled
       return Object.assign(settings, args.settings)
     }
-    if (command === 'search') throw new Error('测试：本地模型未就绪')
+    if (command === 'invalidate_searches') return ++window.testSearchGeneration
+    if (command === 'search') {
+      if (args.generation !== window.testSearchGeneration) return null
+      if (window.testHoldSearch) {
+        const result = await new Promise((resolve) =>
+          window.testPendingSearches.set(args.query, resolve),
+        )
+        return args.generation === window.testSearchGeneration ? result : null
+      }
+      throw new Error('测试：本地模型未就绪')
+    }
     if (command === 'import_files') {
       if (args.paths.length > 1) {
         Object.assign(window.testModel.import, { running: true, done: 0, total: args.paths.length })

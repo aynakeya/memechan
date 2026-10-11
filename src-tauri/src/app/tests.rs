@@ -31,9 +31,23 @@ fn invalid_embedding_manifest_does_not_block_library_operations() -> Result<()> 
             .missing
             .iter()
             .any(|error| error.contains("模型清单无效")));
-        assert_eq!(state.search("敬礼", "keyword", None)?.len(), 1);
-        assert_eq!(state.search("敬礼", "hybrid", None)?.len(), 1);
-        assert!(state.search("敬礼", "semantic", None).is_err());
+        assert_eq!(
+            state
+                .search(state.invalidate_searches(), "敬礼", "keyword", None)?
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            state
+                .search(state.invalidate_searches(), "敬礼", "hybrid", None)?
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(state
+            .search(state.invalidate_searches(), "敬礼", "semantic", None)
+            .is_err());
         assert_eq!(state.import_paths(&paths, None)?.duplicates, 1);
         let another = directory
             .path()
@@ -229,13 +243,9 @@ fn indexing_and_search_work_with_ocr_disabled_and_only_qwen_installed() -> Resul
     let source = PathBuf::from(std::env::var("MEMECHAN_MODEL_TEST_DIR")?);
     let directory = tempfile::tempdir_in(source.parent().unwrap())?;
     let state = Arc::new(AppState::new(directory.path())?);
-    intelligence::import_local(
-        &state.models,
-        Default::default(),
-        &[source.join("memechan-model.json")],
-        &AtomicBool::new(false),
-        |_, _, _| {},
-    )?;
+    state.start_install(vec![source.join("memechan-model.json")])?;
+    wait_until(|| !state.job.lock().unwrap().running)?;
+    assert!(state.job.lock().unwrap().error.is_none());
     state.save_settings(Settings {
         ocr_enabled: false,
         auto_index: false,
@@ -262,7 +272,13 @@ fn indexing_and_search_work_with_ocr_disabled_and_only_qwen_installed() -> Resul
     assert_eq!(asset.ocr_state, "pending");
     assert_eq!(asset.index_state, "ready");
     assert_eq!(status.index.pending, 1);
-    assert_eq!(state.search("salute", "semantic", None)?[0].id, id);
+    assert_eq!(
+        state
+            .search(state.invalidate_searches(), "salute", "semantic", None)?
+            .unwrap()[0]
+            .id,
+        id
+    );
     state.control_task(TaskKind::Index, TaskAction::Resume, None)?;
     wait_until(|| !state.local.lock().unwrap().worker_running)?;
     assert_eq!(state.model_status()?.index.pending, 0);
@@ -296,7 +312,10 @@ fn indexing_and_search_work_with_ocr_disabled_and_only_qwen_installed() -> Resul
         (0, 2, 0)
     );
     assert!(!status.index.running);
-    assert!(state.search("salute", "semantic", None)?.is_empty());
+    assert!(state
+        .search(state.invalidate_searches(), "salute", "semantic", None)?
+        .unwrap()
+        .is_empty());
     state.control_task(TaskKind::Index, TaskAction::Generate, None)?;
     wait_until(|| !state.local.lock().unwrap().worker_running)?;
     assert_eq!(state.model_status()?.index.completed, 2);
@@ -317,7 +336,13 @@ fn indexing_and_search_work_with_ocr_disabled_and_only_qwen_installed() -> Resul
     })?;
     wait_until(|| !state.local.lock().unwrap().worker_running)?;
     assert_eq!(state.model_status()?.index.completed, 2);
-    assert_eq!(state.search("salute", "semantic", None)?[0].id, id);
+    assert_eq!(
+        state
+            .search(state.invalidate_searches(), "salute", "semantic", None)?
+            .unwrap()[0]
+            .id,
+        id
+    );
     Ok(())
 }
 

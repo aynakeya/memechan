@@ -27,14 +27,19 @@ async fn snapshot(state: State<'_, Arc<AppState>>) -> CommandResult<Snapshot> {
     blocking(move || state.library.lock().unwrap().snapshot()).await
 }
 #[tauri::command]
+fn invalidate_searches(state: State<'_, Arc<AppState>>) -> u64 {
+    state.invalidate_searches()
+}
+#[tauri::command]
 async fn search(
     state: State<'_, Arc<AppState>>,
+    generation: u64,
     query: String,
     mode: String,
     group_id: Option<i64>,
-) -> CommandResult<Vec<Asset>> {
+) -> CommandResult<Option<Vec<Asset>>> {
     let state = Arc::clone(state.inner());
-    blocking(move || state.search(&query, &mode, group_id)).await
+    blocking(move || state.search(generation, &query, &mode, group_id)).await
 }
 #[tauri::command]
 async fn import_files(
@@ -275,6 +280,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             snapshot,
             search,
+            invalidate_searches,
             import_files,
             pick_import,
             save_asset,
