@@ -19,6 +19,8 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    // Avoid a Vite 8 / Nuxt UI module-ID race during eager transforms on warm starts.
+    preTransformRequests: false,
     watch: {
       // Native code is watched by Tauri; models and tool environments are not frontend sources.
       ignored: ['**/src-tauri/**', '**/vendor/**', '**/.local/**', '**/models/**'],

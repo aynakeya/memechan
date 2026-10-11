@@ -204,8 +204,9 @@ pnpm test:ui
 如果已有 Chromium，可以通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE` 指定路径，避免重复下载。
 通过 `MEMECHAN_TEST_URL` 可以指定其他本地开发服务地址，默认使用 `http://127.0.0.1:1420/`。
 
-开发窗口若白屏且控制台显示 `504 (Outdated Optimize Dep)`，说明页面引用的 Vite 预构建依赖已失效。
-先停止开发服务，删除 `node_modules/.vite`，再运行 `pnpm tauri dev`；仍显示旧页面时，在开发者工具中禁用网络缓存并重新加载。
+`pnpm tauri dev --release` 仍使用 Vite 开发服务，只将 Rust 后端改为 release 编译。
+当前 Vite 8 与 Nuxt UI 在复用缓存时可能发生模块标识竞态，导致 `504 (Outdated Optimize Dep)` 白屏；
+`vite.config.ts` 已关闭提前转换（`preTransformRequests`）以避开该问题，依赖预构建缓存和热更新仍然保留。
 
 真实 OCR 测试单独执行，先将上表的 OCR 文件按应用内文件名放入指定目录。测试只从本地导入到临时目录并推理，不会下载模型：
 
