@@ -1,6 +1,78 @@
 use super::*;
 
 #[test]
+fn disabling_semantic_search_cancels_work_and_preserves_indexes() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let state = Arc::new(AppState::new(directory.path())?);
+    let path = directory.path().join("敬礼.png");
+    image::RgbaImage::new(4, 4).save(&path)?;
+    state.import_paths(&[path.to_string_lossy().into_owned()], None)?;
+    {
+        let mut library = state.library_write.lock().unwrap();
+        let asset = library.assets()?.remove(0);
+        library.put_embedding(&asset.id, &Library::search_text(&asset), &[1.0, 0.0])?;
+    }
+    let generation = state.invalidate_searches();
+    // Hold an in-flight model operation: disabling must persist first, then wait for release.
+    let models = state.intelligence.lock().unwrap();
+    let disabling = {
+        let state = Arc::clone(&state);
+        std::thread::spawn(move || {
+            state.save_settings(Settings {
+                semantic_enabled: false,
+                ..Default::default()
+            })
+        })
+    };
+    wait_until(|| {
+        !state
+            .library_read
+            .lock()
+            .unwrap()
+            .settings()
+            .unwrap()
+            .semantic_enabled
+    })?;
+    wait_until(|| !state.inference_scheduler.is_search_current(generation))?;
+    assert!(state.search(generation, "敬礼", "hybrid", None)?.is_none());
+    assert_eq!(
+        state
+            .search(state.invalidate_searches(), "敬礼", "hybrid", None)?
+            .unwrap()
+            .len(),
+        1
+    );
+    let queued = {
+        let state = Arc::clone(&state);
+        std::thread::spawn(move || {
+            state.with_models(TaskKind::Index, |_| -> Result<()> {
+                panic!("disabled model must not run")
+            })
+        })
+    };
+    drop(models);
+    disabling.join().unwrap()?;
+    assert!(queued.join().unwrap()?.is_none());
+    assert!(state
+        .search(state.invalidate_searches(), "敬礼", "semantic", None)
+        .is_err());
+    assert!(state
+        .control_task(TaskKind::Index, TaskAction::Resume, None)
+        .is_err());
+    assert_eq!(state.model_status()?.index.completed, 1);
+    assert_eq!(state.model_status()?.index.failed, 0);
+    drop(state);
+    let reopened = Arc::new(AppState::new(directory.path())?);
+    reopened.auto_index()?;
+    let settings = reopened.library_read.lock().unwrap().settings()?;
+    assert!(!settings.semantic_enabled && settings.auto_index);
+    let status = reopened.model_status()?;
+    assert!(!status.semantic_enabled && !status.index.running);
+    assert_eq!(status.index.completed, 1);
+    Ok(())
+}
+
+#[test]
 fn committed_changes_are_readable_while_the_writer_is_occupied() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let state = Arc::new(AppState::new(directory.path())?);
@@ -354,6 +426,36 @@ fn indexing_and_search_work_with_ocr_disabled_and_only_qwen_installed() -> Resul
     wait_until(|| !state.local.lock().unwrap().worker_running)?;
     assert_eq!(state.model_status()?.index.pending, 0);
     assert!(state.model_status()?.index.message.is_empty());
+
+    // Disabling releases the loaded embedding model without clearing stored vectors.
+    state.save_settings(Settings {
+        ocr_enabled: false,
+        semantic_enabled: false,
+        ..Default::default()
+    })?;
+    assert_eq!(state.model_status()?.index.completed, 2);
+    assert_eq!(
+        state
+            .search(state.invalidate_searches(), "开心敬礼", "hybrid", None)?
+            .unwrap()[0]
+            .id,
+        id
+    );
+    assert!(state
+        .search(state.invalidate_searches(), "salute", "semantic", None)
+        .is_err());
+    state.save_settings(Settings {
+        ocr_enabled: false,
+        auto_index: false,
+        ..Default::default()
+    })?;
+    assert_eq!(
+        state
+            .search(state.invalidate_searches(), "salute", "semantic", None)?
+            .unwrap()[0]
+            .id,
+        id
+    );
 
     // Clearing during inference also survives automatic scheduling afterwards.
     state.save_settings(Settings {

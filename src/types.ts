@@ -31,6 +31,7 @@ export interface Settings {
   copySize: number
   allowUpscale: boolean
   autoIndex: boolean
+  semanticEnabled: boolean
   ocrEnabled: boolean
   embeddingModel: 'qwen3-0.6b' | 'qwen3-4b' | 'qwen3-8b'
 }
@@ -64,6 +65,7 @@ export interface ModelStatus {
   ocrReady: boolean
   ocrEnabled: boolean
   directory: string
+  semanticEnabled: boolean
   missing: string[]
   job: JobStatus
   import: JobStatus

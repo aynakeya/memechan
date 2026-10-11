@@ -276,13 +276,27 @@ async function testVision() {
         </UFormField>
         <UFormField
           v-else
+          label="启用语义搜索"
+          description="关闭后仅用关键词检索，停止向量索引并卸载向量模型；正在进行的推理结束后释放。"
+          orientation="horizontal"
+        >
+          <USwitch
+            v-model="draft.semanticEnabled"
+            aria-label="启用语义搜索"
+            :disabled="settingsSaving"
+            @update:model-value="saveSettings()"
+          />
+        </UFormField>
+        <UFormField
+          v-if="settingsTab === 'models'"
           label="自动建立搜索索引"
           description="模型就绪后，导入图片和修改描述会自动索引。"
           orientation="horizontal"
         >
           <USwitch
             v-model="draft.autoIndex"
-            :disabled="settingsSaving"
+            aria-label="自动建立搜索索引"
+            :disabled="settingsSaving || !draft.semanticEnabled"
             @update:model-value="saveSettings()"
           />
         </UFormField>

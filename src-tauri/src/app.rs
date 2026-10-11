@@ -78,6 +78,7 @@ pub struct ModelStatus {
     pub ready: bool,
     pub ocr_ready: bool,
     pub ocr_enabled: bool,
+    pub semantic_enabled: bool,
     pub directory: String,
     pub missing: Vec<String>,
     pub job: JobStatus,
@@ -140,17 +141,18 @@ impl AppState {
         &self,
         kind: TaskKind,
         work: impl FnOnce(&mut Intelligence) -> Result<T>,
-    ) -> Result<T> {
+    ) -> Result<Option<T>> {
         let mut models = self.intelligence.lock().unwrap();
-        let (model, database_version) = {
+        let (settings, database_version) = {
             let library = self.library_read.lock().unwrap();
-            (
-                library.settings()?.embedding_model,
-                library.embedding_version()?,
-            )
+            (library.settings()?, library.embedding_version()?)
         };
+        // Check under the model lock so queued work cannot reload a disabled model.
+        if kind == TaskKind::Index && !settings.semantic_enabled {
+            return Ok(None);
+        }
         if models.is_none() {
-            *models = Some(Intelligence::load(&self.models, model)?);
+            *models = Some(Intelligence::load(&self.models, settings.embedding_model)?);
         }
         if kind == TaskKind::Index {
             let version = models
@@ -163,19 +165,15 @@ impl AppState {
                 return Err("模型版本正在切换，请等待模型导入完成".into());
             }
         }
-        work(models.as_mut().unwrap())
+        work(models.as_mut().unwrap()).map(Some)
     }
     pub fn save_settings(self: &Arc<Self>, settings: Settings) -> Result<()> {
         {
             let install = self.job.lock().unwrap();
             let mut local = self.local.lock().unwrap();
-            let changed_model = self
-                .library_write
-                .lock()
-                .unwrap()
-                .settings()?
-                .embedding_model
-                != settings.embedding_model;
+            let previous = self.library_write.lock().unwrap().settings()?;
+            let changed_model = previous.embedding_model != settings.embedding_model;
+            let disabling_semantic = previous.semantic_enabled && !settings.semantic_enabled;
             if changed_model {
                 if install.running || local.worker_running {
                     return Err("切换模型前请暂停本地任务，并等待当前图片和模型导入完成".into());
@@ -194,6 +192,17 @@ impl AppState {
                 local.index_only = None;
             } else {
                 self.library_write.lock().unwrap().save_settings(settings)?;
+            }
+            if disabling_semantic {
+                self.inference_scheduler.invalidate_searches();
+                local.index.running = false;
+                local.index.message.clear();
+                local.index_only = None;
+                // Settings are already persisted; wait for the current inference to finish,
+                // then release only the embedding session and keep OCR available.
+                if let Some(models) = self.intelligence.lock().unwrap().as_mut() {
+                    models.unload_embedding();
+                }
             }
         }
         self.auto_index()
@@ -229,13 +238,17 @@ impl AppState {
                 return Err("请先暂停当前任务，等待当前图片处理完成".into());
             }
             let library = self.library_write.lock().unwrap();
-            if kind == TaskKind::Ocr && !library.settings()?.ocr_enabled {
+            let settings = library.settings()?;
+            if kind == TaskKind::Ocr && !settings.ocr_enabled {
                 return Err("请先在偏好设置中启用本地 OCR".into());
+            }
+            if kind == TaskKind::Index && !settings.semantic_enabled {
+                return Err("请先在偏好设置中启用语义搜索".into());
             }
             let missing = if kind == TaskKind::Ocr {
                 intelligence::missing_ocr(&self.models)
             } else {
-                intelligence::missing_embedding(&self.models, library.settings()?.embedding_model)
+                intelligence::missing_embedding(&self.models, settings.embedding_model)
             };
             if !missing.is_empty() {
                 return Err(format!("请先导入模型：{}", missing.join("、")).into());
@@ -276,7 +289,7 @@ impl AppState {
                 ),
                 (
                     TaskKind::Index,
-                    settings.auto_index,
+                    settings.semantic_enabled && settings.auto_index,
                     intelligence::missing_embedding(&self.models, settings.embedding_model)
                         .is_empty(),
                 ),
@@ -333,7 +346,7 @@ impl AppState {
                 if settings.auto_index {
                     local.index_only = None;
                 }
-                if local.index.paused {
+                if local.index.paused || !settings.semantic_enabled {
                     local.index.running = false;
                 }
                 // Index each completed OCR result before starting the next image.
@@ -369,11 +382,16 @@ impl AppState {
                 local.job(kind).message = asset.name.clone();
                 (kind, asset)
             };
-            let loaded = self.with_models(kind, |models| match kind {
-                TaskKind::Ocr => models.ensure_ocr(),
-                TaskKind::Index => models.ensure_embedding(),
-                TaskKind::Vision => unreachable!(),
-            });
+            let Some(loaded) = self
+                .with_models(kind, |models| match kind {
+                    TaskKind::Ocr => models.ensure_ocr(),
+                    TaskKind::Index => models.ensure_embedding(),
+                    TaskKind::Vision => unreachable!(),
+                })
+                .transpose()
+            else {
+                continue;
+            };
             if let Err(error) = loaded {
                 let mut local = self.local.lock().unwrap();
                 let job = local.job(kind);
@@ -383,8 +401,12 @@ impl AppState {
                 continue;
             }
             let error = if kind == TaskKind::Ocr {
-                let result =
-                    self.with_models(kind, |models| models.recognize(Path::new(&asset.path)));
+                let Some(result) = self
+                    .with_models(kind, |models| models.recognize(Path::new(&asset.path)))
+                    .transpose()
+                else {
+                    continue;
+                };
                 let library = self.library_write.lock().unwrap();
                 // Clearing text or disabling OCR during inference discards its result.
                 if library.settings()?.ocr_enabled
@@ -407,8 +429,16 @@ impl AppState {
                 }
             } else {
                 let source = Library::search_text(&asset);
-                let result = self.with_models(kind, |models| models.embed(&source, false));
+                let Some(result) = self
+                    .with_models(kind, |models| models.embed(&source, false))
+                    .transpose()
+                else {
+                    continue;
+                };
                 let mut library = self.library_write.lock().unwrap();
+                if !library.settings()?.semantic_enabled {
+                    continue;
+                }
                 match result {
                     Ok(vector) => {
                         library.put_embedding(&asset.id, &source, &vector)?;
@@ -711,17 +741,20 @@ impl AppState {
         let mut embedded = None;
         if !query.trim().is_empty() && mode != "keyword" {
             let settings = self.library_read.lock().unwrap().settings()?;
+            if !settings.semantic_enabled && mode == "semantic" {
+                return Err("语义搜索已关闭，请先在偏好设置中启用".into());
+            }
             let missing = intelligence::missing_embedding(&self.models, settings.embedding_model);
-            if !missing.is_empty() {
+            if settings.semantic_enabled && !missing.is_empty() {
                 if mode == "semantic" {
                     return Err(format!("语义模型不可用：{}", missing.join("、")).into());
                 }
-            } else {
+            } else if settings.semantic_enabled {
                 let Some(_permit) = self.inference_scheduler.acquire_search_permit(generation)
                 else {
                     return Ok(None);
                 };
-                embedded = self.with_models(TaskKind::Index, |models| {
+                let result = self.with_models(TaskKind::Index, |models| {
                     // Model replacement may have kept this request waiting on the mutex.
                     if !self.inference_scheduler.is_search_current(generation) {
                         return Ok(None);
@@ -738,7 +771,11 @@ impl AppState {
                         .map_err(|error| error.clone())?
                         .clone();
                     Ok(Some((vector, version)))
-                })?;
+                });
+                if !self.inference_scheduler.is_search_current(generation) {
+                    return Ok(None);
+                }
+                embedded = result?.flatten();
                 if embedded.is_none() {
                     return Ok(None);
                 }
@@ -796,6 +833,7 @@ impl AppState {
                 .is_empty(),
             ocr_ready: intelligence::missing_ocr(&self.models).is_empty(),
             ocr_enabled: settings.ocr_enabled,
+            semantic_enabled: settings.semantic_enabled,
             directory: self.models.to_string_lossy().into_owned(),
             missing: intelligence::missing(&self.models, settings.embedding_model),
             job,

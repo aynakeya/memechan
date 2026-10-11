@@ -51,6 +51,8 @@ pub struct Settings {
     pub allow_upscale: bool,
     pub auto_index: bool,
     #[serde(default = "enabled_by_default")]
+    pub semantic_enabled: bool,
+    #[serde(default = "enabled_by_default")]
     pub ocr_enabled: bool,
     #[serde(default)]
     pub embedding_model: EmbeddingModel,
@@ -64,6 +66,7 @@ impl Default for Settings {
             copy_size: 0,
             allow_upscale: false,
             auto_index: true,
+            semantic_enabled: true,
             ocr_enabled: true,
             embedding_model: EmbeddingModel::default(),
         }

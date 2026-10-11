@@ -219,9 +219,11 @@ const emit = defineEmits<{
           variant="link"
           size="xs"
           :disabled="model?.index.running"
-          @click="model?.ready ? emit('index') : emit('settings', 'models')"
+          @click="
+            model?.ready && model.semanticEnabled ? emit('index') : emit('settings', 'models')
+          "
         >
-          重新索引
+          {{ model?.semanticEnabled ? '重新索引' : '启用语义搜索' }}
         </UButton>
       </div>
       <div class="space-y-3 border-t border-default pt-4">

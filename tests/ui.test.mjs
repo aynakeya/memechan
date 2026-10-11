@@ -630,6 +630,7 @@ desktopTest('复制缓存显示占用、保留清理结果并呈现错误', asyn
 })
 
 desktopTest('设置草稿、本地模型与图片理解配置', async (page) => {
+  await page.getByRole('tab', { name: '语义搜索', exact: true }).click()
   await page.evaluate(() => {
     window.testModel.ready = false
     window.testModel.missing = ['qwen3-embedding-0.6b/memechan-model.json']
@@ -661,6 +662,33 @@ desktopTest('设置草稿、本地模型与图片理解配置', async (page) => 
   })
   await page.getByRole('button', { name: '导入本地模型', exact: true }).click()
   await page.waitForFunction(() => window.testModel.ready)
+  const semanticSwitch = page.getByRole('switch', { name: '启用语义搜索', exact: true })
+  const autoIndexSwitch = page.getByRole('switch', { name: '自动建立搜索索引', exact: true })
+  await semanticSwitch.click()
+  await page.waitForFunction(() => !window.testModel.semanticEnabled)
+  assert.equal(await autoIndexSwitch.isDisabled(), true)
+  assert.equal(await autoIndexSwitch.getAttribute('aria-checked'), 'true')
+  await page.getByRole('button', { name: '关闭弹窗', exact: true }).click()
+  assert.equal(await page.getByRole('tab', { name: '语义搜索', exact: true }).isDisabled(), true)
+  assert.equal(
+    await page.getByRole('tab', { name: '关键词', exact: true }).getAttribute('aria-selected'),
+    'true',
+  )
+  await page.getByRole('button', { name: '任务管理', exact: true }).click()
+  const indexTask = page.getByRole('region', { name: '文字向量索引', exact: true })
+  await indexTask.getByText('已停用', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '关闭任务管理', exact: true }).click()
+  await page.getByRole('button', { name: '偏好设置', exact: true }).click()
+  await page.getByRole('tab', { name: 'Embedding', exact: true }).click()
+  assert.equal(await semanticSwitch.getAttribute('aria-checked'), 'false')
+  assert.equal(await autoIndexSwitch.getAttribute('aria-checked'), 'true')
+  await semanticSwitch.click()
+  await page.waitForFunction(() => window.testModel.semanticEnabled)
+  await semanticSwitch.waitFor({ state: 'visible' })
+  await page.waitForFunction(
+    () => !document.querySelector('[aria-label="自动建立搜索索引"]').disabled,
+  )
+  assert.equal(await autoIndexSwitch.getAttribute('aria-checked'), 'true')
   const embeddingModel = page.getByRole('combobox', { name: '向量模型', exact: true })
   for (const [label, value] of [
     ['Qwen3-Embedding-4B', 'qwen3-4b'],

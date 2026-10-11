@@ -39,6 +39,7 @@ const settings = {
   copySize: 0,
   allowUpscale: false,
   autoIndex: true,
+  semanticEnabled: true,
   ocrEnabled: true,
   embeddingModel: 'qwen3-0.6b',
 }
@@ -74,6 +75,7 @@ window.testModel = {
   ocrReady: true,
   ocrEnabled: true,
   ready: true,
+  semanticEnabled: true,
   directory: '/local/models',
   missing: [],
   job: job(),
@@ -223,6 +225,7 @@ mockIPC(
         ]
       }
       window.testModel.ocrEnabled = args.settings.ocrEnabled
+      window.testModel.semanticEnabled = args.settings.semanticEnabled
       return Object.assign(settings, args.settings)
     }
     if (command === 'invalidate_searches') return ++window.testSearchGeneration

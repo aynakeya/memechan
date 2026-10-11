@@ -280,6 +280,9 @@ impl Intelligence {
         });
         Ok(())
     }
+    pub fn unload_embedding(&mut self) {
+        self.embedding = None;
+    }
     pub fn recognize(&mut self, path: &Path) -> Result<String> {
         self.ensure_ocr()?;
         let mut texts = Vec::new();

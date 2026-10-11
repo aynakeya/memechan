@@ -37,6 +37,7 @@ const settings = ref<Settings>({
   copySize: 0,
   allowUpscale: false,
   autoIndex: true,
+  semanticEnabled: true,
   ocrEnabled: true,
   embeddingModel: 'qwen3-0.6b',
 })
@@ -96,11 +97,11 @@ const searchError = ref(''),
 const searchInput = useTemplateRef('searchInput')
 const vision = ref<VisionStatus | null>(null)
 const notify = useNotifications()
-const searchTabs = [
+const searchTabs = computed(() => [
   { label: '智能搜索', value: 'hybrid', icon: 'i-lucide-sparkles' },
   { label: '关键词', value: 'keyword' },
-  { label: '语义搜索', value: 'semantic' },
-]
+  { label: '语义搜索', value: 'semantic', disabled: !settings.value.semanticEnabled },
+])
 const sortOptions = [
   { label: '最近添加', value: 'newest' },
   { label: '名称排序', value: 'name' },
@@ -238,6 +239,13 @@ function scheduleSearch() {
   if (!searchComposing.value) searchTimer = setTimeout(runSearch, 350)
 }
 watch([query, searchMode, scope, searchComposing], scheduleSearch)
+watch(
+  () => settings.value.semanticEnabled,
+  (enabled) => {
+    if (!enabled && searchMode.value === 'semantic') searchMode.value = 'keyword'
+    else scheduleSearch()
+  },
+)
 watch([query, searchMode, scope, onlyAnimated, sort], clearSelection)
 watch(visible, (list) => {
   const ids = new Set(list.map((asset) => asset.id))
@@ -846,14 +854,14 @@ onBeforeUnmount(() => {
               aria-label="搜索方式"
             />
             <UButton
-              v-if="!model?.ready"
+              v-if="!settings.semanticEnabled || !model?.ready"
               size="xs"
               variant="link"
               color="neutral"
               trailing-icon="i-lucide-arrow-right"
               @click="openSettings('models')"
             >
-              配置 OCR 与语义搜索
+              {{ settings.semanticEnabled ? '配置 OCR 与语义搜索' : '语义搜索已关闭' }}
             </UButton>
             <span v-else class="flex items-center gap-1.5 text-xs text-muted">
               <span class="size-1.5 rounded-full bg-primary"></span>
@@ -878,7 +886,13 @@ onBeforeUnmount(() => {
             >
               后台任务处理中
             </UButton>
-            <span v-if="query && searchMode === 'hybrid' && !model?.ready">当前使用关键词匹配</span>
+            <span
+              v-if="
+                query && searchMode === 'hybrid' && (!settings.semanticEnabled || !model?.ready)
+              "
+            >
+              当前使用关键词匹配
+            </span>
           </div>
           <div class="flex flex-wrap items-center gap-2">
             <UButton
