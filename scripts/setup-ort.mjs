@@ -98,7 +98,11 @@ try {
   }
   const extracted = path.join(staging, 'lib')
   mkdirSync(extracted)
-  execFileSync('tar', ['-xf', tarFile, '-C', extracted], { stdio: 'inherit' })
+  // Relative paths avoid GNU tar treating a Windows drive letter as a remote host.
+  execFileSync('tar', ['-xf', 'runtime.tar', '-C', 'lib'], {
+    cwd: staging,
+    stdio: 'inherit',
+  })
   const library = target.includes('windows') ? 'onnxruntime.lib' : 'libonnxruntime.a'
   if (!existsSync(path.join(extracted, library))) {
     throw new Error(`压缩包缺少 ${library}`)

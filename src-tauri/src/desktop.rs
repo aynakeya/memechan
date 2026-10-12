@@ -271,7 +271,14 @@ fn pause_install(state: State<'_, Arc<AppState>>) {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    // Register first, before database/background task setup. `dev --release` is still dev.
+    if !tauri::is_dev() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            tray::show_main_window(app);
+        }));
+    }
+    builder
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let root = app.path().app_data_dir()?;

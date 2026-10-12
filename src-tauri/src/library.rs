@@ -353,7 +353,7 @@ impl Library {
             &format!(
                 "UPDATE assets SET {column}='pending'{extra} WHERE
             (?1 IS NOT NULL AND id=?1) OR
-            (?1 IS NULL AND ({column}='error' OR (?2=0 AND {column}='idle')))"
+            (?1 IS NULL AND {column}=CASE WHEN ?2 THEN 'error' ELSE 'idle' END)"
             ),
             params![id, retry],
         )?;

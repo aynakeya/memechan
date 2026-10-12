@@ -23,7 +23,7 @@
 
 ## 启动
 
-使用 pnpm 11.12.0 管理依赖，版本固定在 `package.json` 的 `packageManager`。需要 Node.js 22.13+（推荐 24）、Rust 1.90+、C/C++ 构建工具和各平台的 [Tauri 开发依赖](https://v2.tauri.app/start/prerequisites/)。
+使用本机安装的 pnpm 管理依赖，项目不固定 pnpm 版本。需要 Node.js 22.13+（推荐 24）、Rust 1.90+、C/C++ 构建工具和各平台的 [Tauri 开发依赖](https://v2.tauri.app/start/prerequisites/)。
 
 Ubuntu / Debian 先安装开发包：
 

@@ -168,6 +168,22 @@ desktopTest('详情开关、编辑描述、复制尺寸、预览及搜索错误�
   await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 6)
 })
 
+desktopTest('通知在窗口失焦时到期，并在恢复时清除已过期提示', async (page) => {
+  const card = page.locator('.asset-card').first()
+  await card.dblclick()
+  const message = page.getByText('已复制图片', { exact: true })
+  await message.first().waitFor()
+  await page.evaluate(() => window.dispatchEvent(new window.Event('blur')))
+  await message.first().waitFor({ state: 'hidden', timeout: 5000 })
+
+  await card.dblclick()
+  await message.first().waitFor()
+  // Advance the wall clock without running timers, as if the WebView was suspended.
+  await page.clock.setFixedTime(new Date(Date.now() + 10000))
+  await page.evaluate(() => window.dispatchEvent(new window.Event('focus')))
+  await message.first().waitFor({ state: 'hidden', timeout: 1500 })
+})
+
 desktopTest('批量管理：修饰键连选、分组增减、删除确认和失败重试', async (page) => {
   const cards = page.locator('.asset-card')
   const names = await cards.evaluateAll((items) =>

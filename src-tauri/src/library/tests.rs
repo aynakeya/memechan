@@ -264,6 +264,9 @@ fn text_changes_preserve_other_sources_and_reject_stale_vectors() -> Result<()> 
     library.fail_vision(&asset.id, "HTTP 429")?;
     assert_eq!(library.asset(&asset.id)?.ai_description, description.text);
     library.queue_task(TaskKind::Vision, None, false)?;
+    assert_eq!(library.task_counts(TaskKind::Vision)?.0, 0);
+    assert_eq!(library.asset(&asset.id)?.ai_error, "HTTP 429");
+    library.queue_task(TaskKind::Vision, None, true)?;
     assert_eq!(library.task_counts(TaskKind::Vision)?.0, 1);
     library.delete_asset(&asset.id)?;
     library.update_vision(&asset.id, &description)?;

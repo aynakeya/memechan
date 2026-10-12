@@ -335,6 +335,85 @@ fn vision_queue_pauses_retries_and_discards_cleared_inflight_results() -> Result
 }
 
 #[test]
+fn vision_queue_skips_bad_images_until_explicit_retry() -> Result<()> {
+    use crate::test_support::{completion, server};
+    let (base_url, server) = server(vec![(200, completion("图片描述")); 4], |_| {})?;
+    let directory = tempfile::tempdir()?;
+    let state = Arc::new(AppState::new(&directory.path().join("library"))?);
+    let mut config = VisionConfig {
+        base_url,
+        ..Default::default()
+    };
+    state.save_vision_config(config.clone())?;
+
+    // The first frame is valid (so import succeeds), but the second has an invalid LZW code.
+    let mut gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff".to_vec();
+    let frame = b"\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00";
+    gif.extend_from_slice(frame);
+    gif.extend_from_slice(frame);
+    let invalid_code = gif.len() - 3;
+    gif[invalid_code] = 0x7c;
+    gif.push(0x3b);
+    let bad_path = directory.path().join("bad.gif");
+    std::fs::write(&bad_path, &gif)?;
+    assert_eq!(
+        state
+            .import_paths(&[bad_path.to_string_lossy().into()], None)?
+            .added,
+        1
+    );
+    let bad = state.library_read.lock().unwrap().assets()?.remove(0);
+
+    for index in 0..3 {
+        if index == 2 {
+            config.auto_describe = true;
+            state.save_vision_config(config.clone())?;
+        }
+        let path = directory.path().join(format!("good-{index}.png"));
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([index, 0, 0, 255])).save(&path)?;
+        assert_eq!(
+            state
+                .import_paths(&[path.to_string_lossy().into()], None)?
+                .added,
+            1
+        );
+        if index < 2 {
+            state.control_task(TaskKind::Vision, TaskAction::Generate, None)?;
+        }
+        wait_until(|| !state.model_status().unwrap().vision.running)?;
+        let status = state.model_status()?.vision;
+        assert!(!status.paused);
+        assert_eq!(
+            (status.pending, status.failed, status.completed),
+            (0, 1, index as usize + 1)
+        );
+        assert_eq!(status.done, if index == 0 { 2 } else { 1 });
+        assert_eq!(status.error.is_some(), index == 0);
+        let failed = state.library_read.lock().unwrap().asset(&bad.id)?;
+        assert_eq!(failed.ai_state, "error");
+        assert!(failed
+            .ai_error
+            .to_lowercase()
+            .contains("invalid code in lzw stream"));
+    }
+
+    // Retrying a still-bad file finishes normally; once repaired, retry can recover it.
+    state.control_task(TaskKind::Vision, TaskAction::Retry, None)?;
+    wait_until(|| !state.model_status().unwrap().vision.running)?;
+    assert_eq!(state.model_status()?.vision.done, 1);
+    assert!(!state.model_status()?.vision.paused);
+    gif[invalid_code] = 0x44;
+    std::fs::write(&bad.path, gif)?;
+    state.control_task(TaskKind::Vision, TaskAction::Retry, Some(&bad.id))?;
+    wait_until(|| !state.model_status().unwrap().vision.running)?;
+    let status = state.model_status()?.vision;
+    assert_eq!((status.pending, status.failed, status.completed), (0, 0, 4));
+    assert!(status.error.is_none());
+    assert_eq!(server.join().unwrap().len(), 4);
+    Ok(())
+}
+
+#[test]
 fn vision_config_survives_restart_and_can_be_edited_or_cleared() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let root = directory.path();

@@ -3,7 +3,7 @@ use crate::{
     inference_scheduler::InferenceScheduler,
     intelligence::{self, Intelligence},
     library::{Asset, ImportReport, Library, Settings, TaskKind},
-    vision::{Description, VisionClient, VisionConfig},
+    vision::{Description, VisionClient, VisionConfig, VisionError},
     Result,
 };
 use serde::{Deserialize, Serialize};
@@ -609,6 +609,7 @@ impl AppState {
         client: &VisionClient,
         mut only: Option<&str>,
     ) -> Result<()> {
+        let mut failed = 0;
         loop {
             let asset = {
                 let mut session = self.vision.lock().unwrap();
@@ -624,7 +625,12 @@ impl AppState {
                         continue;
                     }
                     session.job.running = false;
-                    session.job.message = "描述生成完成".into();
+                    session.job.message = "描述处理完成".into();
+                    if failed > 0 {
+                        session.job.error = Some(format!(
+                            "本次有 {failed} 张图片处理失败，可在图片详情中查看原因"
+                        ));
+                    }
                     return Ok(());
                 };
                 session.job.message = asset.name.clone();
@@ -641,7 +647,10 @@ impl AppState {
                         Ok(description) => library.update_vision(&asset.id, &description)?,
                         Err(error) => {
                             library.fail_vision(&asset.id, &error.to_string())?;
-                            return Err(format!("{}：{error}", asset.name).into());
+                            if matches!(error, VisionError::Api(_)) {
+                                return Err(format!("{}：{error}", asset.name).into());
+                            }
+                            failed += 1;
                         }
                     }
                 }

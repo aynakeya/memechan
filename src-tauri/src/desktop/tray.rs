@@ -5,7 +5,10 @@ use tauri::{
 };
 
 pub(super) fn show_main_window(app: &AppHandle) {
-    let window = app.get_webview_window("main").expect("主窗口不存在");
+    // Another launch can arrive before startup has created the initially visible window.
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
     if let Err(error) = window
         .show()
         .and_then(|()| window.unminimize())

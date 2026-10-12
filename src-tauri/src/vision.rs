@@ -70,6 +70,28 @@ pub struct Description {
     pub model: String,
 }
 
+#[derive(Debug)]
+pub enum VisionError {
+    Image(Box<dyn std::error::Error + Send + Sync>),
+    Api(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl std::fmt::Display for VisionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Image(error) | Self::Api(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for VisionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Image(error) | Self::Api(error) => Some(error.as_ref()),
+        }
+    }
+}
+
 impl VisionClient {
     pub fn new(mut config: VisionConfig) -> Result<Self> {
         let endpoint = config.endpoint()?;
@@ -88,8 +110,9 @@ impl VisionClient {
         })
     }
 
-    pub fn describe(&self, path: &Path) -> Result<Description> {
-        self.describe_frames(media::sample_frames(path)?)
+    pub fn describe(&self, path: &Path) -> std::result::Result<Description, VisionError> {
+        let frames = media::sample_frames(path).map_err(VisionError::Image)?;
+        self.describe_frames(frames).map_err(VisionError::Api)
     }
 
     pub fn probe(&self) -> Result<Description> {
