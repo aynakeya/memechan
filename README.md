@@ -72,6 +72,25 @@ pnpm tauri build
 
 跨平台代码和图标已准备，当前验证了 Linux 开发版本。Windows/macOS 的构建、签名和粘贴兼容性仍需在对应环境验证。ONNX Runtime 由 `ort` 按目标平台链接；发布安装包时还需核对动态运行库是否完整分发。
 
+### GitHub Actions 自动构建
+
+[Build desktop apps](.github/workflows/build.yml) 支持两种触发方式：
+
+- 将工作流推送到 GitHub 默认分支后，在 **Actions → Build desktop apps → Run workflow** 手动构建。
+- 向 GitHub 推送 `v*` tag（例如 `v0.1.0`）自动构建对应提交。版本号仍由 `src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 管理，打 tag 不会自动修改版本。
+
+构建成功后，在该次运行页面的 **Artifacts** 下载产物，保留 14 天，不自动创建 Release：
+
+| 产物                        | 内容与运行条件                                                                                             |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `memechan-windows-x64.zip`  | `memechan.exe` 和配套 DirectML 等 DLL，解压到同一目录运行；仍需 WebView2 和 Microsoft VC++ 运行库。        |
+| `memechan-linux-x64.tar.gz` | Ubuntu 24.04 上构建的可执行文件，保留执行权限；仍依赖兼容的 glibc、GTK 3、WebKitGTK 4.1 和 AppIndicator。  |
+| `memechan-macos-arm64.zip`  | Apple Silicon 的 `Memechan.app`，使用 ad-hoc 签名；未做 Apple 开发者签名或公证，系统可能要求手动允许打开。 |
+
+CI 使用 Node.js 24、pnpm 11 和 Rust stable，按锁文件安装依赖；pnpm 只约束主版本，不改变本地开发的版本选择。缓存 pnpm、Cargo 和 ONNX Runtime；首次构建会通过 `pnpm setup:ort --download` 显式下载清单中的原生库并校验 SHA-256，不下载或打包 OCR / Embedding 模型。Linux / Windows 使用 `--no-bundle`，不会调用 AppImage、deb 或 Windows 安装包工具。
+
+工作流只需要仓库读取权限，不需要发布 token 或签名证书。公开的 OCR 子模块由 checkout 自动通过 HTTPS 获取，无需配置 SSH 私钥；主仓库引用的子模块提交必须已推送到 GitHub fork。macOS 暂只构建 ARM64，当前 ONNX Runtime 清单没有 Intel macOS 包。
+
 ## 使用
 
 把图片拖入窗口即可添加；打开分组后导入，会加入该分组。单击选中，工具栏「详情」开关查看描述、OCR 和所属分组；双击复制，空格预览，Ctrl / Cmd K 搜索。描述可以显式保存，也会在切换所选图片时保存。

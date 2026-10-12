@@ -1,0 +1,142 @@
+name: Build desktop apps
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - platform: windows-x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+          - platform: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: 2
+      BUILD_DIR: src-tauri/target/${{ matrix.target }}/release
+      ARTIFACT_NAME: memechan-${{ matrix.platform }}
+
+    steps:
+      - name: Check out source and OCR submodule
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential cmake nasm pkg-config curl xz-utils \
+            libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev libxdo-dev \
+            libayatana-appindicator3-dev patchelf
+
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: brew install cmake nasm xz
+
+      - name: Install Windows assembler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nasm --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content $env:GITHUB_PATH "$env:ProgramFiles\NASM"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11
+          cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.target }}-${{ hashFiles('scripts/onnxruntime.json') }}
+
+      - name: Cache ONNX Runtime
+        id: ort-cache
+        uses: actions/cache@v6
+        with:
+          path: .local/onnxruntime
+          key: ort-${{ matrix.target }}-${{ hashFiles('scripts/onnxruntime.json', 'scripts/setup-ort.mjs') }}
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare ONNX Runtime
+        if: steps.ort-cache.outputs.cache-hit != 'true'
+        # Git Bash provides xz and tar on the Windows runner.
+        shell: bash
+        run: pnpm setup:ort --download --target '${{ matrix.target }}'
+
+      - name: Build Linux or Windows executable
+        if: runner.os != 'macOS'
+        run: pnpm tauri build --ci --no-bundle --target ${{ matrix.target }} -- --locked
+
+      - name: Build macOS app
+        if: runner.os == 'macOS'
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: pnpm tauri build --ci --bundles app --target ${{ matrix.target }} -- --locked
+
+      - name: Package Linux executable
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p artifacts "package/$ARTIFACT_NAME"
+          cp "$BUILD_DIR/memechan" "package/$ARTIFACT_NAME/"
+          tar -czf "artifacts/$ARTIFACT_NAME.tar.gz" -C package "$ARTIFACT_NAME"
+
+      - name: Package Windows executable and runtime DLLs
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $package = "package/$env:ARTIFACT_NAME"
+          New-Item -ItemType Directory -Path artifacts, $package | Out-Null
+          # Use the DirectML version shipped with ORT, not the system copy.
+          Copy-Item "$env:BUILD_DIR/memechan.exe", "$env:BUILD_DIR/*.dll" $package
+          Compress-Archive -Path $package -DestinationPath "artifacts/$env:ARTIFACT_NAME.zip"
+
+      - name: Package macOS app
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$BUILD_DIR/bundle/macos/Memechan.app" "artifacts/$ARTIFACT_NAME.zip"
+
+      - name: Upload app archive
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/*
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
