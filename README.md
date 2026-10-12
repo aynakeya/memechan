@@ -193,9 +193,9 @@ python scripts/export_qwen.py --size 4b \
 
 ### 本地数据
 
-数据放在 Tauri 的应用数据目录 `com.emojidesktop.app` 下，Linux 通常为 `~/.local/share/com.emojidesktop.app/`：
+应用标识为 `com.aynakeya.memechan`，资料库目录独立配置为 `memechan`，Linux 通常为 `~/.local/share/memechan/`：
 
-改名为 Memechan 后继续使用这个应用标识，已有图片、模型与设置无需迁移。
+旧版 `com.emojidesktop.app` 数据目录会在首次启动新版本时自动整体迁移，保留图片、模型、设置和索引，之后统一使用新目录，无需手动搬运。迁移在窗口和资料库打开前执行；旧版仍在使用资料库或新旧目录同时存在时停止启动并报错，不覆盖已有数据。
 
 ```text
 library.sqlite3    元数据、分组、设置、文字与向量

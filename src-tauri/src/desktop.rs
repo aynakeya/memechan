@@ -278,7 +278,7 @@ pub fn run() {
             tray::show_main_window(app);
         }));
     }
-    builder
+    let app = builder
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let root = app.path().app_data_dir()?;
@@ -352,11 +352,20 @@ pub fn run() {
             test_vision
         ])
         .build(tauri::generate_context!())
-        .expect("无法启动 Memechan")
-        .run(|_app, _event| {
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = _event {
-                tray::show_main_window(_app);
-            }
-        });
+        .expect("无法启动 Memechan");
+    // Plugins (including single-instance) are ready, but windows and WebViews
+    // are only created by run(). Migrate before anything opens the data directory.
+    let legacy = app
+        .path()
+        .data_dir()
+        .expect("无法确定旧数据目录")
+        .join("com.emojidesktop.app");
+    let root = app.path().app_data_dir().expect("无法确定应用数据目录");
+    crate::migration::migrate(&legacy, &root).expect("无法迁移旧版资料库");
+    app.run(|_app, _event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { .. } = _event {
+            tray::show_main_window(_app);
+        }
+    });
 }

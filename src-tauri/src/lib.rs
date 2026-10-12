@@ -10,6 +10,8 @@ mod inference_scheduler;
 pub mod intelligence;
 pub mod library;
 pub mod media;
+#[cfg(any(feature = "desktop", test))]
+mod migration;
 pub mod vision;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
