@@ -69,9 +69,8 @@ impl ClipboardState {
             .to_string_lossy()
             .into_owned()])];
         if asset.animated {
-            let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("gif");
-            let format = match extension {
-                "gif" => {
+            let format = match path.extension().and_then(|extension| extension.to_str()) {
+                Some("gif") => {
                     if cfg!(target_os = "macos") {
                         "com.compuserve.gif"
                     } else if cfg!(target_os = "windows") {
@@ -80,14 +79,15 @@ impl ClipboardState {
                         "image/gif"
                     }
                 }
-                "webp" => "image/webp",
-                _ => {
+                Some("webp") => "image/webp",
+                Some("png") => {
                     if cfg!(target_os = "macos") {
                         "public.png"
                     } else {
                         "image/png"
                     }
                 }
+                _ => return Err("不支持的动图复制格式".into()),
             };
             contents.push(ClipboardContent::Other(
                 format.into(),

@@ -50,7 +50,7 @@ fn local_models_import_safely_and_support_ocr() -> Result<()> {
         &cancel,
         |_, _, _| {},
     )?;
-    let mut models = Intelligence::load(&destination, model)?;
+    let mut models = Intelligence::load(&destination, model);
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ocr.png");
     let recognized = models.recognize(&fixture)?;
     assert!(
@@ -75,7 +75,7 @@ fn selected_qwen_model_supports_multilingual_search() -> Result<()> {
         &AtomicBool::new(false),
         |_, _, _| {},
     )?;
-    let mut models = Intelligence::load(installed.path(), model)?;
+    let mut models = Intelligence::load(installed.path(), model);
     let related = models.embed("上班很累，我只想摸鱼早点下班", false)?;
     let unrelated = models.embed("生日快乐，祝你生日开心", false)?;
     for text in [

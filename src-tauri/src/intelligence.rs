@@ -68,11 +68,6 @@ pub const OCR_FILES: &[ModelFile] = &[
         sha256: "5825fc7ebf84ae7a412be049820b4d86d77620f204a041697b0494669b1742c5",
     },
 ];
-pub fn missing(directory: &Path, model: EmbeddingModel) -> Vec<String> {
-    let mut files = missing_ocr(directory);
-    files.extend(missing_embedding(directory, model));
-    files
-}
 pub fn missing_ocr(directory: &Path) -> Vec<String> {
     missing_files(directory, OCR_FILES)
 }
@@ -175,7 +170,6 @@ pub fn import_local(
             return Ok(());
         }
         let target = directory.join(file.name);
-        fs::create_dir_all(target.parent().unwrap())?;
         if !target.is_file() || checksum(&target)? != file.sha256 {
             progress(index, selected.len(), format!("复制 {}", file.name));
             let temporary = target.with_file_name(format!(
@@ -207,15 +201,15 @@ struct Embedding {
     output: String,
 }
 impl Intelligence {
-    pub fn load(directory: &Path, model: EmbeddingModel) -> Result<Self> {
+    pub fn load(directory: &Path, model: EmbeddingModel) -> Self {
         ort::init().with_telemetry(false).commit();
-        Ok(Self {
+        Self {
             directory: directory.to_path_buf(),
             model,
             version: model_version(directory, model).map_err(|error| error.to_string()),
             ocr: None,
             embedding: None,
-        })
+        }
     }
     pub fn ensure_ocr(&mut self) -> Result<()> {
         if self.ocr.is_some() {
@@ -256,7 +250,6 @@ impl Intelligence {
         let bundle = Bundle::installed(&self.directory, self.model)?
             .ok_or("请先导入所选 Qwen 的 memechan-model.json")?;
         let directory = bundle.directory(&self.directory)?;
-        bundle.verify(&directory)?;
         let output = bundle.output;
         let session = Session::builder()?
             .with_intra_threads(2)

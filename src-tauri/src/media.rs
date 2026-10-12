@@ -227,7 +227,7 @@ pub fn sample_frames(path: &Path) -> Result<Vec<DynamicImage>> {
         "gif" => GifDecoder::new(reader)?.into_frames(),
         "webp" => WebPDecoder::new(reader)?.into_frames(),
         "png" => PngDecoder::new(reader)?.apng()?.into_frames(),
-        _ => return Ok(vec![info.preview]),
+        _ => return Err("不支持的动图格式".into()),
     };
     // Bounded sampling keeps GIF analysis from loading every decoded frame into RAM.
     let mut samples = vec![];

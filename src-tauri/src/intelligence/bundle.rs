@@ -66,14 +66,6 @@ impl Bundle {
     pub fn directory(&self, root: &Path) -> Result<PathBuf> {
         Ok(root.join(self.model.directory()).join(self.fingerprint()?))
     }
-    pub fn verify(&self, directory: &Path) -> Result<()> {
-        for (name, expected) in &self.files {
-            if checksum(&directory.join(name))? != expected.to_lowercase() {
-                return Err(format!("{name} 校验失败，请重新导入模型包").into());
-            }
-        }
-        Ok(())
-    }
 }
 
 pub fn import(

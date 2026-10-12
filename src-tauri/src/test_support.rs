@@ -66,8 +66,9 @@ impl crate::library::Library {
         } else {
             None
         };
-        self.search_data(group, version.as_deref())?
-            .rank(query, mode, embedding)
+        Ok(self
+            .search_data(group, version.as_deref())?
+            .rank(query, mode, embedding))
     }
 
     pub fn import_files(
@@ -80,8 +81,12 @@ impl crate::library::Library {
             let result = (|| -> Result<bool> {
                 let path = std::path::Path::new(path);
                 let (id, bytes) = crate::import::read_source(path)?;
+                if self.attach_duplicate(&id, group)? {
+                    return Ok(false);
+                }
                 let prepared = crate::import::PreparedImport::new(&self.root, path, id, &bytes)?;
-                self.insert_import(prepared, group)
+                self.insert_import(prepared, group)?;
+                Ok(true)
             })();
             match result {
                 Ok(true) => report.added += 1,

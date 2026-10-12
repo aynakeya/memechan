@@ -152,7 +152,7 @@ impl AppState {
             return Ok(None);
         }
         if models.is_none() {
-            *models = Some(Intelligence::load(&self.models, settings.embedding_model)?);
+            *models = Some(Intelligence::load(&self.models, settings.embedding_model));
         }
         if kind == TaskKind::Index {
             let version = models
@@ -694,7 +694,8 @@ impl AppState {
                     self.library_write
                         .lock()
                         .unwrap()
-                        .insert_import(prepared, group)
+                        .insert_import(prepared, group)?;
+                    Ok(true)
                 })();
                 let added = matches!(item, Ok(true));
                 match item {
@@ -804,12 +805,11 @@ impl AppState {
         if !self.inference_scheduler.is_search_current(generation) {
             return Ok(None);
         }
-        data.rank(
+        Ok(Some(data.rank(
             query,
             mode,
             embedded.as_ref().map(|(vector, _)| vector.as_slice()),
-        )
-        .map(Some)
+        )))
     }
 
     pub fn model_status(&self) -> Result<ModelStatus> {
@@ -836,15 +836,20 @@ impl AppState {
             }
             job
         };
+        let mut missing = intelligence::missing_ocr(&self.models);
+        let ocr_ready = missing.is_empty();
+        let embedding_missing =
+            intelligence::missing_embedding(&self.models, settings.embedding_model);
+        let ready = embedding_missing.is_empty();
+        missing.extend(embedding_missing);
         Ok(ModelStatus {
             library_revision,
-            ready: intelligence::missing_embedding(&self.models, settings.embedding_model)
-                .is_empty(),
-            ocr_ready: intelligence::missing_ocr(&self.models).is_empty(),
+            ready,
+            ocr_ready,
             ocr_enabled: settings.ocr_enabled,
             semantic_enabled: settings.semantic_enabled,
             directory: self.models.to_string_lossy().into_owned(),
-            missing: intelligence::missing(&self.models, settings.embedding_model),
+            missing,
             job,
             import,
             ocr: update(ocr, counts.ocr),

@@ -669,11 +669,9 @@ impl Library {
         }
         Ok(exists)
     }
-    pub fn insert_import(&mut self, prepared: PreparedImport, group: Option<i64>) -> Result<bool> {
+    // The serialized import job checks duplicates before preparing the image.
+    pub fn insert_import(&mut self, prepared: PreparedImport, group: Option<i64>) -> Result<()> {
         let id = &prepared.id;
-        if self.attach_duplicate(id, group)? {
-            return Ok(false);
-        }
         let original = self
             .root
             .join("originals")
@@ -718,7 +716,7 @@ impl Library {
             }
             return Err(error);
         }
-        Ok(true)
+        Ok(())
     }
     pub fn update_ocr(&self, id: &str, text: &str) -> Result<()> {
         self.db.execute(
@@ -798,14 +796,11 @@ pub struct SearchData {
     embeddings: Vec<(String, String, Vec<u8>)>,
 }
 impl SearchData {
-    pub fn rank(self, query: &str, mode: &str, embedding: Option<&[f32]>) -> Result<Vec<Asset>> {
-        if !["hybrid", "keyword", "semantic"].contains(&mode) {
-            return Err("无效的搜索模式".into());
-        }
+    pub fn rank(self, query: &str, mode: &str, embedding: Option<&[f32]>) -> Vec<Asset> {
         let query = query.trim().to_lowercase();
         let mut assets = self.assets;
         if query.is_empty() {
-            return Ok(assets);
+            return assets;
         }
         let sources: Vec<_> = assets.iter().map(Library::search_text).collect();
         let mut keyword = vec![];
@@ -854,7 +849,7 @@ impl SearchData {
         assets.retain(|a| a.score.is_some());
         assets.sort_by(|a, b| b.score.unwrap().total_cmp(&a.score.unwrap()));
         assets.truncate(100);
-        Ok(assets)
+        assets
     }
 }
 

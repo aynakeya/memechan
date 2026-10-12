@@ -179,7 +179,7 @@ fn search_ranks_valid_vectors_and_keywords_within_the_selected_group() -> Result
     let data = reader.search_data(Some(group.id), Some(&version))?;
     // A completed read remains usable after edits; a new read rejects the stale vector.
     library.save_asset(&ids[1], "正在睡觉", false, &[group.id])?;
-    let previous = data.rank("敬礼", "semantic", Some(&query))?;
+    let previous = data.rank("敬礼", "semantic", Some(&query));
     assert_eq!(previous.len(), 2);
     assert_eq!(previous[0].description, "收到长官");
     let result = reader.search("敬礼", "semantic", Some(group.id), Some(&query))?;
@@ -192,7 +192,7 @@ fn search_ranks_valid_vectors_and_keywords_within_the_selected_group() -> Result
     // An old query vector must never be compared with a different model's vectors.
     assert!(reader
         .search_data(None, Some(&version))?
-        .rank("敬礼", "semantic", Some(&query))?
+        .rank("敬礼", "semantic", Some(&query))
         .is_empty());
     assert_eq!(
         reader.search("敬礼", "semantic", None, Some(&query))?.len(),
