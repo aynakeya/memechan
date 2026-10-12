@@ -285,3 +285,7 @@ MEMECHAN_MODEL_TEST_DIR=/tmp/memechan-models \
 - Linux 开发版本构建、隔离 Xvfb 中原生窗口启动与文件导入；静图剪贴板尺寸及 GIF 剪贴板完整字节校验。
 
 日常开发需按上方说明安装系统开发依赖。Discord、Telegram 与具体网页中的实际粘贴，以及 Windows/macOS 的运行尚未验证。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)，Copyright (c) 2026 aynakeya。第三方依赖和模型继续遵循各自的许可证。

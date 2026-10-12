@@ -113,7 +113,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p artifacts "package/$ARTIFACT_NAME"
-          cp "$BUILD_DIR/memechan" "package/$ARTIFACT_NAME/"
+          cp "$BUILD_DIR/memechan" LICENSE "package/$ARTIFACT_NAME/"
           tar -czf "artifacts/$ARTIFACT_NAME.tar.gz" -C package "$ARTIFACT_NAME"
 
       - name: Package Windows executable and runtime DLLs
@@ -123,15 +123,17 @@ jobs:
           $package = "package/$env:ARTIFACT_NAME"
           New-Item -ItemType Directory -Path artifacts, $package | Out-Null
           # Use the DirectML version shipped with ORT, not the system copy.
-          Copy-Item "$env:BUILD_DIR/memechan.exe", "$env:BUILD_DIR/*.dll" $package
+          Copy-Item "$env:BUILD_DIR/memechan.exe", "$env:BUILD_DIR/*.dll", LICENSE $package
           Compress-Archive -Path $package -DestinationPath "artifacts/$env:ARTIFACT_NAME.zip"
 
       - name: Package macOS app
         if: runner.os == 'macOS'
         run: |
-          mkdir -p artifacts
+          mkdir -p artifacts "package/$ARTIFACT_NAME"
+          ditto "$BUILD_DIR/bundle/macos/Memechan.app" "package/$ARTIFACT_NAME/Memechan.app"
+          cp LICENSE "package/$ARTIFACT_NAME/"
           ditto -c -k --sequesterRsrc --keepParent \
-            "$BUILD_DIR/bundle/macos/Memechan.app" "artifacts/$ARTIFACT_NAME.zip"
+            "package/$ARTIFACT_NAME" "artifacts/$ARTIFACT_NAME.zip"
 
       - name: Upload app archive
         uses: actions/upload-artifact@v7
