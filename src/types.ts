@@ -8,6 +8,7 @@ export interface Asset {
   height: number
   bytes: number
   animated: boolean
+  copySize: number | null
   description: string
   aiDescription: string
   aiState: string

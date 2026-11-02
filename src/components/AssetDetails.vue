@@ -1,20 +1,24 @@
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue'
 import UBadge from '@nuxt/ui/components/Badge.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UCheckbox from '@nuxt/ui/components/Checkbox.vue'
 import UFormField from '@nuxt/ui/components/FormField.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
+import UInput from '@nuxt/ui/components/Input.vue'
+import USelect from '@nuxt/ui/components/Select.vue'
 import UTextarea from '@nuxt/ui/components/Textarea.vue'
 import { fileUrl } from '../api'
 import { bytesLabel, sizeLabel, stateLabel } from '../format'
 import type { Asset, Group, ModelStatus } from '../types'
-defineProps<{
+const props = defineProps<{
   page: boolean
   asset: Asset
   groups: Group[]
   model: ModelStatus | null
   visionActive: boolean
   copySize: number
+  copySizeSaving: boolean
   copying: string | null
   saving: boolean
   descriptionSaved: string
@@ -24,6 +28,7 @@ const emit = defineEmits<{
   close: []
   preview: []
   copy: []
+  copySize: [size: number | null]
   favorite: []
   save: []
   index: []
@@ -35,6 +40,31 @@ const emit = defineEmits<{
   toggleGroup: [id: number]
   remove: []
 }>()
+const copySizes = [
+  { label: '跟随全局', value: 'global' },
+  { label: '原始尺寸', value: '0' },
+  ...[128, 256, 512].map((size) => ({ label: sizeLabel(size), value: String(size) })),
+  { label: '自定义', value: 'custom' },
+]
+const copyMode = ref('global')
+const customCopySize = ref(320)
+const draftCopySize = computed(() =>
+  copyMode.value === 'global'
+    ? null
+    : copyMode.value === 'custom'
+      ? customCopySize.value
+      : Number(copyMode.value),
+)
+watch(
+  [() => props.asset.id, () => props.asset.copySize],
+  () => {
+    const size = props.asset.copySize
+    copyMode.value =
+      size === null ? 'global' : [0, 128, 256, 512].includes(size) ? String(size) : 'custom'
+    customCopySize.value = size || 320
+  },
+  { immediate: true },
+)
 </script>
 <template>
   <aside
@@ -99,8 +129,44 @@ const emit = defineEmits<{
         @click="emit('copy')"
       >
         复制表情
-        <span class="ml-auto text-xs opacity-80">{{ sizeLabel(copySize) }}</span>
+        <span class="ml-auto text-xs opacity-80">{{ sizeLabel(asset.copySize ?? copySize) }}</span>
       </UButton>
+      <UFormField label="默认复制尺寸" name="asset-copy-size">
+        <form class="space-y-2" @submit.prevent="emit('copySize', draftCopySize)">
+          <div class="flex items-center gap-2">
+            <USelect
+              v-model="copyMode"
+              :items="copySizes"
+              class="min-w-0 flex-1"
+              :disabled="copySizeSaving"
+              aria-label="图片默认复制尺寸"
+            />
+            <UButton
+              type="submit"
+              variant="soft"
+              :loading="copySizeSaving"
+              :disabled="draftCopySize === asset.copySize"
+              aria-label="保存图片默认复制尺寸"
+            >
+              保存
+            </UButton>
+          </div>
+          <UInput
+            v-if="copyMode === 'custom'"
+            v-model.number="customCopySize"
+            class="w-full"
+            type="number"
+            :min="1"
+            :max="4096"
+            :step="1"
+            :disabled="copySizeSaving"
+            required
+            aria-label="图片默认复制最长边"
+          >
+            <template #trailing><span class="text-xs text-muted">px</span></template>
+          </UInput>
+        </form>
+      </UFormField>
       <UFormField label="我的描述" name="description">
         <UTextarea
           v-model="description"

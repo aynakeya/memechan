@@ -9,7 +9,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const ASSET_COLUMNS: &str = "id,name,extension,width,height,bytes,animated,description,ocr_text,ocr_state,index_state,favorite,created_at,ai_description,ai_state,ai_error,ai_model";
+const ASSET_COLUMNS: &str = "id,name,extension,width,height,bytes,animated,description,ocr_text,ocr_state,index_state,favorite,created_at,ai_description,ai_state,ai_error,ai_model,copy_size";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +23,7 @@ pub struct Asset {
     pub height: u32,
     pub bytes: u64,
     pub animated: bool,
+    pub copy_size: Option<u32>,
     pub description: String,
     pub ai_description: String,
     pub ai_state: String,
@@ -157,6 +158,14 @@ impl Library {
                 ALTER TABLE assets ADD COLUMN ai_error TEXT NOT NULL DEFAULT '';
                 ALTER TABLE assets ADD COLUMN ai_model TEXT NOT NULL DEFAULT '';
                 PRAGMA user_version=3;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 4 {
+            let tx = db.transaction()?;
+            tx.execute_batch(
+                "ALTER TABLE assets ADD COLUMN copy_size INTEGER;
+                PRAGMA user_version=4;",
             )?;
             tx.commit()?;
         }
@@ -459,6 +468,7 @@ impl Library {
             ai_state: row.get(14)?,
             ai_error: row.get(15)?,
             ai_model: row.get(16)?,
+            copy_size: row.get(17)?,
             groups: vec![],
             score: None,
         })
@@ -597,6 +607,19 @@ impl Library {
             )?;
         }
         tx.commit()?;
+        Ok(())
+    }
+    pub fn set_asset_copy_size(&self, id: &str, size: Option<u32>) -> Result<()> {
+        if size.is_some_and(|size| size > 4096) {
+            return Err("复制最长边不能超过 4096 px".into());
+        }
+        if self.db.execute(
+            "UPDATE assets SET copy_size=?1 WHERE id=?2",
+            params![size, id],
+        )? == 0
+        {
+            return Err("表情不存在".into());
+        }
         Ok(())
     }
     pub fn set_assets_group(&mut self, ids: &[String], group: i64, add: bool) -> Result<()> {

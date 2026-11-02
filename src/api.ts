@@ -35,6 +35,8 @@ export const api = {
   pickImport: (groupId: number | null) => invoke<ImportReport>('pick_import', { groupId }),
   saveAsset: (id: string, description: string, favorite: boolean, groups: number[]) =>
     invoke<void>('save_asset', { id, description, favorite, groups }),
+  setAssetCopySize: (id: string, size: number | null) =>
+    invoke<void>('set_asset_copy_size', { id, size }),
   deleteAsset: (id: string) => invoke<void>('delete_asset', { id }),
   deleteAssets: (ids: string[]) => invoke<void>('delete_assets', { ids }),
   setAssetsGroup: (ids: string[], groupId: number, add: boolean) =>

@@ -60,7 +60,7 @@ impl ClipboardState {
     ) -> Result<String> {
         // Serialize both cached-file creation and writing to the native clipboard.
         let mut clipboard = self.0.lock().unwrap();
-        let size = size.unwrap_or(settings.copy_size);
+        let size = size.or(asset.copy_size).unwrap_or(settings.copy_size);
         let path = media::prepare_copy(asset, root, size, settings.allow_upscale)?;
         if clipboard.context.is_none() {
             clipboard.context = Some(ClipboardContext::new()?);

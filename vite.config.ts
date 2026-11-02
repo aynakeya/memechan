@@ -1,8 +1,20 @@
+import { execFileSync } from 'node:child_process'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import ui from '@nuxt/ui/vite'
+import tauriConfig from './src-tauri/tauri.conf.json' with { type: 'json' }
 
 export default defineConfig({
+  define: {
+    __BUILD_INFO__: JSON.stringify({
+      version: tauriConfig.version,
+      commit: execFileSync('git', ['rev-parse', '--short=7', 'HEAD'], {
+        cwd: import.meta.dirname,
+        encoding: 'utf8',
+      }).trim(),
+      builtAt: new Date().toISOString(),
+    }),
+  },
   plugins: [
     vue(),
     ui({

@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn image_copy_size_migrates_and_persists_without_changing_search_data() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("library");
+    let source = directory.path().join("meme.png");
+    image::RgbaImage::new(12, 8).save(&source)?;
+    let mut library = Library::open(&root)?;
+    library.import_files(&[source.to_string_lossy().into_owned()], None);
+    let id = library.assets()?.remove(0).id;
+    let group = library.save_group(None, "动作", "#88966d")?;
+    library.save_asset(&id, "敬礼", true, &[group.id])?;
+    library.update_ocr(&id, "收到")?;
+    let text = Library::search_text(&library.asset(&id)?);
+    library.put_embedding(&id, &text, &[1.0, 0.0])?;
+    library.db.execute_batch(
+        "ALTER TABLE assets DROP COLUMN copy_size;
+        PRAGMA user_version=3;",
+    )?;
+    drop(library);
+
+    let library = Library::open(&root)?;
+    assert_eq!(library.asset(&id)?.copy_size, None);
+    library.set_asset_copy_size(&id, Some(320))?;
+    drop(library);
+
+    let library = Library::open(&root)?;
+    let reader = Library::open_read_only(&root)?;
+    assert_eq!(reader.asset(&id)?.copy_size, Some(320));
+    for size in [Some(256), Some(0), None] {
+        library.set_asset_copy_size(&id, size)?;
+        let asset = reader.asset(&id)?;
+        assert_eq!(asset.copy_size, size);
+        assert_eq!(asset.description, "敬礼");
+        assert_eq!(asset.groups, vec![group.id]);
+        assert!(asset.favorite);
+        assert_eq!(asset.ocr_state, "ready");
+        assert_eq!(asset.index_state, "ready");
+        assert_eq!(
+            reader.search("敬礼", "semantic", None, Some(&[1.0, 0.0]))?[0].id,
+            id
+        );
+    }
+    assert!(library.set_asset_copy_size(&id, Some(4097)).is_err());
+    assert_eq!(reader.asset(&id)?.copy_size, None);
+    assert!(library.set_asset_copy_size("missing", Some(128)).is_err());
+    Ok(())
+}
+
+#[test]
 fn clearing_indexes_preserves_text_and_waits_for_explicit_rebuild() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let root = directory.path().join("library");
@@ -395,6 +443,7 @@ fn ocr_upgrade_preserves_library_and_queues_reindexing_once() -> Result<()> {
             ALTER TABLE assets DROP COLUMN ai_state;
             ALTER TABLE assets DROP COLUMN ai_error;
             ALTER TABLE assets DROP COLUMN ai_model;
+            ALTER TABLE assets DROP COLUMN copy_size;
             PRAGMA user_version=1;",
     )?;
     drop(library);

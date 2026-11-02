@@ -21,6 +21,7 @@ const assets = names.map((name, i) => {
     height: 256,
     bytes: 20480,
     animated: i === 1,
+    copySize: null,
     description: i === 1 ? '假装忙碌，其实想下班' : '',
     aiDescription: '',
     aiState: 'idle',
@@ -188,6 +189,12 @@ mockIPC(
         assets.find((a) => a.id === args.id),
         { description: args.description, favorite: args.favorite, groups: args.groups },
       )
+    }
+    if (command === 'set_asset_copy_size') {
+      if (window.testCopySizeError) throw new Error(window.testCopySizeError)
+      assets.find((asset) => asset.id === args.id).copySize = args.size
+      window.testModel.libraryRevision++
+      return
     }
     if (command === 'set_assets_group') {
       if (window.testBatchError) throw new Error(window.testBatchError)

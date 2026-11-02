@@ -96,6 +96,22 @@ async fn save_asset(
     .await
 }
 #[tauri::command]
+async fn set_asset_copy_size(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    size: Option<u32>,
+) -> CommandResult<()> {
+    let state = Arc::clone(state.inner());
+    blocking(move || {
+        state
+            .library_write
+            .lock()
+            .unwrap()
+            .set_asset_copy_size(&id, size)
+    })
+    .await
+}
+#[tauri::command]
 async fn delete_asset(state: State<'_, Arc<AppState>>, id: String) -> CommandResult<()> {
     let state = Arc::clone(state.inner());
     blocking(move || state.library_write.lock().unwrap().delete_asset(&id)).await
@@ -333,6 +349,7 @@ pub fn run() {
             import_files,
             pick_import,
             save_asset,
+            set_asset_copy_size,
             delete_asset,
             delete_assets,
             set_assets_group,

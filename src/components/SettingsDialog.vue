@@ -48,11 +48,15 @@ const requiredMissing = computed(
       settingsTab.value === 'ocr' ? name.startsWith('ocr-') : !name.startsWith('ocr-'),
     ) ?? [],
 )
+const buildInfo = __BUILD_INFO__
+const buildTime = buildInfo.builtAt.slice(0, 19).replace('T', ' ') + ' UTC'
+const isDevelopment = import.meta.env.DEV
 const settingsTabs = [
   { label: '复制与资料库', value: 'general' },
   { label: 'OCR', value: 'ocr' },
   { label: 'Embedding', value: 'models' },
   { label: '图片理解 API', value: 'vision' },
+  { label: '关于', value: 'about' },
 ]
 const embeddingModels = [
   { label: 'Qwen3-Embedding-0.6B', value: 'qwen3-0.6b' },
@@ -181,7 +185,7 @@ async function testVision() {
       <div v-if="settingsTab === 'general'" class="space-y-6">
         <UFormField
           label="默认复制尺寸"
-          description="双击和普通复制时使用，按比例缩放。填 0 保留原尺寸。"
+          description="未单独设置的图片使用此尺寸。填 0 保留原尺寸。"
           orientation="horizontal"
           :ui="{ wrapper: 'flex-1', container: 'shrink-0' }"
         >
@@ -399,6 +403,44 @@ async function testVision() {
           </p>
         </details>
       </div>
+      <section
+        v-else-if="settingsTab === 'about'"
+        aria-label="关于 Memechan"
+        class="space-y-6 py-2"
+      >
+        <div class="flex items-center gap-4">
+          <img src="/memechan-icon.png" alt="" width="64" height="64" />
+          <div>
+            <div class="flex items-center gap-2">
+              <h3 class="text-xl font-semibold">Memechan</h3>
+              <UBadge v-if="isDevelopment" color="neutral" variant="subtle" size="sm">
+                开发版
+              </UBadge>
+            </div>
+            <p class="mt-1 text-sm text-muted">表情资料库</p>
+          </div>
+        </div>
+        <dl class="divide-y divide-default rounded-lg border border-default px-4 text-sm">
+          <div class="flex items-center justify-between gap-4 py-3">
+            <dt class="text-muted">应用版本</dt>
+            <dd>{{ buildInfo.version }}</dd>
+          </div>
+          <div class="flex items-center justify-between gap-4 py-3">
+            <dt class="text-muted">Git 提交</dt>
+            <dd class="font-mono">{{ buildInfo.commit }}</dd>
+          </div>
+          <div class="flex items-center justify-between gap-4 py-3">
+            <dt class="text-muted">{{ isDevelopment ? '开发服务启动时间' : '构建时间' }}</dt>
+            <dd class="text-right tabular-nums">
+              <time :datetime="buildInfo.builtAt">{{ buildTime }}</time>
+            </dd>
+          </div>
+          <div class="flex items-center justify-between gap-4 py-3">
+            <dt class="text-muted">许可证</dt>
+            <dd>MIT</dd>
+          </div>
+        </dl>
+      </section>
       <div v-else class="space-y-4">
         <p class="text-xs text-muted">
           生成时会将压缩图片发送到所配置的 API，可能产生费用。文字索引在本地建立。

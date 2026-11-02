@@ -168,6 +168,80 @@ desktopTest('详情开关、编辑描述、复制尺寸、预览及搜索错误�
   await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 6)
 })
 
+desktopTest('图片默认复制尺寸：独立保存、自定义、跟随全局和临时复制', async (page) => {
+  await page.getByRole('button', { name: '偏好设置' }).click()
+  await page.getByLabel('默认复制最长边').fill('128')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await page.getByRole('button', { name: '关闭弹窗' }).click()
+  const card = page.getByRole('article', { name: '正在认真摸鱼', exact: true })
+  await card.click()
+  await page.getByRole('button', { name: '详情', exact: true }).click()
+  const panel = page.locator('.details-panel')
+  const copy = panel.getByRole('button', { name: /^复制表情/ })
+  const save = panel.getByRole('button', { name: '保存图片默认复制尺寸' })
+  const choose = async (label) => {
+    await panel.getByLabel('图片默认复制尺寸', { exact: true }).click()
+    await page.getByRole('option', { name: label, exact: true }).click()
+  }
+  assert.match(await copy.innerText(), /128 px/)
+  await choose('最长边 256 px')
+  await save.click()
+  await page.waitForFunction(() => window.testAssets[1].copySize === 256)
+  await save.waitFor({ state: 'visible' })
+  await page.waitForFunction(() =>
+    document.querySelector('.details-panel')?.textContent.includes('最长边 256 px'),
+  )
+  assert.match(await copy.innerText(), /256 px/)
+
+  await card.dblclick()
+  await page.waitForFunction(() =>
+    window.testCalls.some((call) => call.command === 'copy_asset' && call.args.size === null),
+  )
+  await card.click({ button: 'right' })
+  await page.getByRole('menuitem', { name: '最长边 512 px', exact: true }).click()
+  await page.waitForFunction(() =>
+    window.testCalls.some((call) => call.command === 'copy_asset' && call.args.size === 512),
+  )
+  assert.equal(await page.evaluate(() => window.testAssets[1].copySize), 256)
+  await panel.getByLabel('我的描述').fill('尚未保存的描述')
+  await choose('自定义')
+  await panel.getByLabel('图片默认复制最长边').fill('320')
+  await save.click()
+  await page.waitForFunction(() => window.testAssets[1].copySize === 320)
+  assert.equal(await panel.getByLabel('我的描述').inputValue(), '尚未保存的描述')
+
+  await page.getByRole('article', { name: '谢谢老板', exact: true }).click()
+  assert.match(await copy.innerText(), /128 px/)
+  await card.click()
+  assert.equal(await panel.getByLabel('图片默认复制最长边').inputValue(), '320')
+  await choose('原始尺寸')
+  await save.click()
+  await page.waitForFunction(() => window.testAssets[1].copySize === 0)
+  await page.waitForFunction(
+    () => document.querySelector('.details-panel button .ml-auto')?.textContent === '原始尺寸',
+  )
+  assert.match(await copy.innerText(), /原始尺寸/)
+
+  await page.evaluate(() => {
+    window.testCopySizeError = '测试：保存失败'
+  })
+  await choose('最长边 256 px')
+  await save.click()
+  await page.getByText('测试：保存失败', { exact: true }).waitFor()
+  assert.equal(await page.evaluate(() => window.testAssets[1].copySize), 0)
+  assert.match(await copy.innerText(), /原始尺寸/)
+  await page.evaluate(() => {
+    window.testCopySizeError = ''
+  })
+  await choose('跟随全局')
+  await save.click()
+  await page.waitForFunction(() => window.testAssets[1].copySize === null)
+  await page.waitForFunction(() =>
+    document.querySelector('.details-panel button .ml-auto')?.textContent.includes('128 px'),
+  )
+  assert.match(await copy.innerText(), /128 px/)
+})
+
 desktopTest('通知在窗口失焦时到期，并在恢复时清除已过期提示', async (page) => {
   const card = page.locator('.asset-card').first()
   await card.dblclick()

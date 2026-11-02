@@ -67,6 +67,7 @@ const mainContent = useTemplateRef<HTMLElement>('mainContent')
 const description = ref(''),
   descriptionSaved = ref(''),
   saving = ref(false)
+const copySizeSaving = ref(false)
 const dragging = ref(false),
   onlyAnimated = ref(false),
   compact = ref(false),
@@ -410,6 +411,17 @@ async function importAssets(paths?: string[]) {
     dragging.value = false
   }
 }
+async function saveCopySize(asset: Asset, size: number | null) {
+  copySizeSaving.value = true
+  try {
+    await api.setAssetCopySize(asset.id, size)
+    await refresh()
+  } catch (error) {
+    notify(errorMessage(error), true)
+  } finally {
+    copySizeSaving.value = false
+  }
+}
 async function copy(asset: Asset, size: number | null = null) {
   if (copying.value) return
   copying.value = asset.id
@@ -428,7 +440,8 @@ function assetMenu(asset: Asset): ContextMenuItem[][] {
       { label: '复制尺寸', type: 'label' },
       ...sizes.map((size) => ({
         label: sizeLabel(size),
-        icon: settings.value.copySize === size ? 'i-lucide-check' : 'i-lucide-copy',
+        icon:
+          (asset.copySize ?? settings.value.copySize) === size ? 'i-lucide-check' : 'i-lucide-copy',
         onSelect: () => void copy(asset, size),
       })),
       {
@@ -1084,12 +1097,14 @@ onBeforeUnmount(() => {
         :model="model"
         :vision-active="!!vision?.active"
         :copy-size="settings.copySize"
+        :copy-size-saving="copySizeSaving"
         :copying="copying"
         :saving="saving"
         :description-saved="descriptionSaved"
         @close="closeDetails()"
         @preview="preview = selected"
         @copy="copy(selected)"
+        @copy-size="saveCopySize(selected, $event)"
         @favorite="favorite(selected)"
         @save="saveDetails()"
         @index="generate('index', selected.id)"
